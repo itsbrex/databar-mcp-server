@@ -31,6 +31,14 @@ import {
   formatPatchRowsResponse,
   formatUpsertRowsResponse
 } from './utils.js';
+import {
+  loadSpendingConfig,
+  checkSpendingGuard,
+  validateBulkSize,
+  sanitizeResult,
+  SpendingConfig
+} from './guards.js';
+import { auditLog } from './audit.js';
 import { DatabarConfig, CategorizedEnrichment, EnrichmentCategory } from './types.js';
 
 dotenv.config();
@@ -49,6 +57,7 @@ const config: DatabarConfig = {
   pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || '2000'),
 };
 
+const spendingConfig: SpendingConfig = loadSpendingConfig();
 const databarClient = new DatabarClient(config);
 const cache = new Cache(config.cacheTtlHours);
 
@@ -58,16 +67,36 @@ const ENRICHMENTS_CACHE_TTL = 5 * 60 * 1000;
 
 async function getCachedEnrichments(): Promise<CategorizedEnrichment[]> {
   const now = Date.now();
-  
   if (enrichmentsCache && (now - enrichmentsCacheTime) < ENRICHMENTS_CACHE_TTL) {
     return enrichmentsCache;
   }
-
   const enrichments = await databarClient.getAllEnrichments();
   enrichmentsCache = enrichments.map(categorizeEnrichment);
   enrichmentsCacheTime = now;
-  
   return enrichmentsCache;
+}
+
+/**
+ * Helper: check spending guard and return an MCP error response if blocked, else null.
+ */
+async function guardSpending(
+  toolName: string,
+  estimatedCost: number,
+  params: Record<string, any>
+): Promise<{ content: { type: string; text: string }[]; isError: true } | null> {
+  const blocked = await checkSpendingGuard(databarClient, estimatedCost, spendingConfig);
+  if (blocked) {
+    auditLog({ timestamp: new Date().toISOString(), tool: toolName, params, estimatedCost, result: 'blocked', message: blocked });
+    return { content: [{ type: 'text', text: blocked }], isError: true };
+  }
+  return null;
+}
+
+/**
+ * Helper: wrap result text with sanitization.
+ */
+function safeResult(text: string): string {
+  return sanitizeResult(text, spendingConfig.maxResultLength);
 }
 
 // ============================================================================
@@ -116,7 +145,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'run_enrichment',
-    description: 'Execute a data enrichment with the provided parameters. Automatically handles async execution and polling, returning final results. Results are cached for 24 hours to reduce costs.',
+    description: 'Execute a data enrichment with the provided parameters. Automatically handles async execution and polling, returning final results. Results are cached for 24 hours to reduce costs. Subject to spending limits (DATABAR_MAX_COST_PER_REQUEST, DATABAR_MIN_BALANCE).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -140,7 +169,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'run_bulk_enrichment',
-    description: 'Execute an enrichment on multiple inputs at once. Provide an array of parameter objects. Automatically handles async execution and polling. Use this when you need to enrich many records in a single call.',
+    description: 'Execute an enrichment on multiple inputs at once (max 50). Provide an array of parameter objects. Subject to spending limits.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -151,7 +180,8 @@ const TOOLS: Tool[] = [
         params_list: {
           type: 'array',
           items: { type: 'object', additionalProperties: true },
-          description: 'Array of parameter objects, one per record (e.g., [{"email": "a@b.com"}, {"email": "c@d.com"}])'
+          description: 'Array of parameter objects, one per record (max 50)',
+          maxItems: 50
         }
       },
       required: ['enrichment_id', 'params_list']
@@ -175,7 +205,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'run_waterfall',
-    description: 'Execute a waterfall enrichment that tries multiple providers until one succeeds. Returns the result along with details about which providers were tried and their costs.',
+    description: 'Execute a waterfall enrichment that tries multiple providers until one succeeds. Subject to spending limits.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -203,7 +233,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'run_bulk_waterfall',
-    description: 'Execute a waterfall enrichment on multiple inputs at once. Provide an array of parameter objects. Use this when you need to process many records through a waterfall in a single call.',
+    description: 'Execute a waterfall enrichment on multiple inputs at once (max 50). Subject to spending limits.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -214,7 +244,8 @@ const TOOLS: Tool[] = [
         params_list: {
           type: 'array',
           items: { type: 'object', additionalProperties: true },
-          description: 'Array of parameter objects, one per record'
+          description: 'Array of parameter objects, one per record (max 50)',
+          maxItems: 50
         },
         provider_ids: {
           type: 'array',
@@ -234,18 +265,12 @@ const TOOLS: Tool[] = [
   {
     name: 'create_table',
     description: 'Create a new empty table in your Databar workspace.',
-    inputSchema: {
-      type: 'object',
-      properties: {}
-    }
+    inputSchema: { type: 'object', properties: {} }
   },
   {
     name: 'list_tables',
     description: 'List all tables in your Databar workspace. Returns table UUIDs, names, and timestamps.',
-    inputSchema: {
-      type: 'object',
-      properties: {}
-    }
+    inputSchema: { type: 'object', properties: {} }
   },
   {
     name: 'get_table_columns',
@@ -253,10 +278,7 @@ const TOOLS: Tool[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        table_uuid: {
-          type: 'string',
-          description: 'The UUID of the table'
-        }
+        table_uuid: { type: 'string', description: 'The UUID of the table' }
       },
       required: ['table_uuid']
     }
@@ -267,74 +289,43 @@ const TOOLS: Tool[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        table_uuid: {
-          type: 'string',
-          description: 'The UUID of the table'
-        },
-        page: {
-          type: 'number',
-          description: 'Page number (default: 1)',
-          default: 1
-        },
-        per_page: {
-          type: 'number',
-          description: 'Rows per page (default: 1000, max: 1000)',
-          default: 1000
-        }
+        table_uuid: { type: 'string', description: 'The UUID of the table' },
+        page: { type: 'number', description: 'Page number (default: 1)', default: 1 },
+        per_page: { type: 'number', description: 'Rows per page (default: 1000, max: 1000)', default: 1000 }
       },
       required: ['table_uuid']
     }
   },
   {
     name: 'create_rows',
-    description: 'Insert new rows into a table. Supports up to 50 rows per request, with options for deduplication, auto-creating columns, and insert position.',
+    description: 'Insert new rows into a table (max 50 per request).',
     inputSchema: {
       type: 'object',
       properties: {
-        table_id: {
-          type: 'string',
-          description: 'The ID of the table'
-        },
+        table_id: { type: 'string', description: 'The ID of the table' },
         records: {
           type: 'array',
           items: {
             type: 'object',
-            properties: {
-              fields: {
-                type: 'object',
-                description: 'Map of column keys to values',
-                additionalProperties: true
-              }
-            },
+            properties: { fields: { type: 'object', additionalProperties: true } },
             required: ['fields']
           },
-          description: 'Array of row records to insert (max 50)',
+          description: 'Array of row records (max 50)',
           maxItems: 50
         },
         options: {
           type: 'object',
           properties: {
-            allowNewColumns: {
-              type: 'boolean',
-              description: 'Auto-create columns that don\'t exist (default: false)'
-            },
-            typecast: {
-              type: 'boolean',
-              description: 'Attempt type coercion (default: true)'
-            },
+            allowNewColumns: { type: 'boolean', description: 'Auto-create columns (default: false)' },
+            typecast: { type: 'boolean', description: 'Attempt type coercion (default: true)' },
             dedupe: {
               type: 'object',
               properties: {
                 enabled: { type: 'boolean' },
-                keys: {
-                  type: 'array',
-                  items: { type: 'string' },
-                  description: 'Field keys used for duplicate detection'
-                }
+                keys: { type: 'array', items: { type: 'string' } }
               }
             }
-          },
-          description: 'Optional insert options'
+          }
         }
       },
       required: ['table_id', 'records']
@@ -342,61 +333,43 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'patch_rows',
-    description: 'Update specific fields on existing rows by row ID. Supports up to 50 rows per request.',
+    description: 'Update specific fields on existing rows by row ID (max 50 per request).',
     inputSchema: {
       type: 'object',
       properties: {
-        table_id: {
-          type: 'string',
-          description: 'The ID of the table'
-        },
+        table_id: { type: 'string', description: 'The ID of the table' },
         rows: {
           type: 'array',
           items: {
             type: 'object',
             properties: {
-              id: { type: 'string', description: 'Row ID to update' },
-              fields: { type: 'object', description: 'Fields to update', additionalProperties: true }
+              id: { type: 'string', description: 'Row ID' },
+              fields: { type: 'object', additionalProperties: true }
             },
             required: ['id', 'fields']
           },
           description: 'Array of patch operations (max 50)',
           maxItems: 50
         },
-        overwrite: {
-          type: 'boolean',
-          description: 'If false, non-empty cells will not be overwritten (default: true)',
-          default: true
-        }
+        overwrite: { type: 'boolean', description: 'Overwrite non-empty cells (default: true)', default: true }
       },
       required: ['table_id', 'rows']
     }
   },
   {
     name: 'upsert_rows',
-    description: 'Insert or update rows based on a matching key. If a row with the key exists, it is updated; otherwise a new row is created. Supports up to 50 rows per request.',
+    description: 'Insert or update rows by matching key (max 50 per request).',
     inputSchema: {
       type: 'object',
       properties: {
-        table_id: {
-          type: 'string',
-          description: 'The ID of the table'
-        },
+        table_id: { type: 'string', description: 'The ID of the table' },
         rows: {
           type: 'array',
           items: {
             type: 'object',
             properties: {
-              key: {
-                type: 'object',
-                description: 'Key field(s) to match on (V1 supports one key field)',
-                additionalProperties: true
-              },
-              fields: {
-                type: 'object',
-                description: 'Fields to set on the row',
-                additionalProperties: true
-              }
+              key: { type: 'object', additionalProperties: true },
+              fields: { type: 'object', additionalProperties: true }
             },
             required: ['key', 'fields']
           },
@@ -409,55 +382,36 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'get_table_enrichments',
-    description: 'List all enrichments configured on a table. Returns enrichment IDs and names.',
+    description: 'List all enrichments configured on a table.',
     inputSchema: {
       type: 'object',
       properties: {
-        table_uuid: {
-          type: 'string',
-          description: 'The UUID of the table'
-        }
+        table_uuid: { type: 'string', description: 'The UUID of the table' }
       },
       required: ['table_uuid']
     }
   },
   {
     name: 'add_table_enrichment',
-    description: 'Add an enrichment to a table with column mapping. The mapping defines how table columns map to enrichment parameters.',
+    description: 'Add an enrichment to a table with column mapping.',
     inputSchema: {
       type: 'object',
       properties: {
-        table_uuid: {
-          type: 'string',
-          description: 'The UUID of the table'
-        },
-        enrichment_id: {
-          type: 'number',
-          description: 'The enrichment ID to add'
-        },
-        mapping: {
-          type: 'object',
-          description: 'Parameter-to-column mapping. Each key is a param name, value is {value: "column_name", type: "mapping"} or {value: "literal", type: "simple"}',
-          additionalProperties: true
-        }
+        table_uuid: { type: 'string', description: 'The UUID of the table' },
+        enrichment_id: { type: 'number', description: 'The enrichment ID to add' },
+        mapping: { type: 'object', description: 'Parameter-to-column mapping', additionalProperties: true }
       },
       required: ['table_uuid', 'enrichment_id', 'mapping']
     }
   },
   {
     name: 'run_table_enrichment',
-    description: 'Trigger an enrichment to run on all rows in a table. Use get_table_enrichments first to find enrichment IDs.',
+    description: 'Trigger an enrichment to run on all rows in a table. Subject to spending limits.',
     inputSchema: {
       type: 'object',
       properties: {
-        table_uuid: {
-          type: 'string',
-          description: 'The UUID of the table'
-        },
-        enrichment_id: {
-          type: 'string',
-          description: 'The ID of the table enrichment to run'
-        }
+        table_uuid: { type: 'string', description: 'The UUID of the table' },
+        enrichment_id: { type: 'string', description: 'The table enrichment ID to run' }
       },
       required: ['table_uuid', 'enrichment_id']
     }
@@ -466,11 +420,8 @@ const TOOLS: Tool[] = [
   // --- User tools ---
   {
     name: 'get_user_balance',
-    description: 'Get the current user\'s credit balance and account information. Useful for checking if there are enough credits before running expensive enrichments.',
-    inputSchema: {
-      type: 'object',
-      properties: {}
-    }
+    description: 'Get the current user\'s credit balance and account information.',
+    inputSchema: { type: 'object', properties: {} }
   }
 ];
 
@@ -479,7 +430,7 @@ const TOOLS: Tool[] = [
 // ============================================================================
 
 const server = new Server(
-  { name: 'databar-mcp-server', version: '1.1.0' },
+  { name: 'databar-mcp-server', version: '1.2.0' },
   { capabilities: { tools: {} } }
 );
 
@@ -493,6 +444,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
+  const ts = new Date().toISOString();
 
   try {
     switch (name) {
@@ -503,129 +455,108 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'search_enrichments': {
         const { query, category, limit = 10 } = args as {
-          query: string;
-          category?: EnrichmentCategory;
-          limit?: number;
+          query: string; category?: EnrichmentCategory; limit?: number;
         };
 
+        auditLog({ timestamp: ts, tool: name, params: { query, category, limit }, result: 'success' });
+
         let enrichments = await getCachedEnrichments();
-
-        if (category) {
-          enrichments = filterByCategory(enrichments, category);
-        }
-
-        enrichments = searchEnrichments(enrichments, query);
-        enrichments = enrichments.slice(0, limit);
+        if (category) enrichments = filterByCategory(enrichments, category);
+        enrichments = searchEnrichments(enrichments, query).slice(0, limit);
 
         if (enrichments.length === 0) {
-          return {
-            content: [{
-              type: 'text',
-              text: `No enrichments found matching "${query}". Try a different search term or browse all enrichments.`
-            }]
-          };
+          return { content: [{ type: 'text', text: `No enrichments found matching "${query}".` }] };
         }
 
         return {
-          content: [{
-            type: 'text',
-            text: `Found ${enrichments.length} enrichment(s):\n\n${enrichments.map(formatEnrichmentForDisplay).join('\n\n---\n\n')}`
-          }]
+          content: [{ type: 'text', text: safeResult(
+            `Found ${enrichments.length} enrichment(s):\n\n${enrichments.map(formatEnrichmentForDisplay).join('\n\n---\n\n')}`
+          )}]
         };
       }
 
       case 'get_enrichment_details': {
         const { enrichment_id } = args as { enrichment_id: number };
-        
+        auditLog({ timestamp: ts, tool: name, params: { enrichment_id }, result: 'success' });
+
         const enrichment = await databarClient.getEnrichmentDetails(enrichment_id);
         const categorized = categorizeEnrichment(enrichment);
 
         const details = {
-          id: categorized.id,
-          name: categorized.name,
-          category: categorized.category,
-          description: categorized.description,
-          data_source: categorized.data_source,
-          price: categorized.price,
-          auth_method: categorized.auth_method,
-          parameters: categorized.params?.map(p => ({
-            name: p.name,
-            required: p.is_required,
-            type: p.type_field,
-            description: p.description
-          })),
-          response_fields: categorized.response_fields?.map(f => ({
-            name: f.name,
-            type: f.type_field
-          }))
+          id: categorized.id, name: categorized.name, category: categorized.category,
+          description: categorized.description, data_source: categorized.data_source,
+          price: categorized.price, auth_method: categorized.auth_method,
+          parameters: categorized.params?.map(p => ({ name: p.name, required: p.is_required, type: p.type_field, description: p.description })),
+          response_fields: categorized.response_fields?.map(f => ({ name: f.name, type: f.type_field }))
         };
 
         return {
-          content: [{
-            type: 'text',
-            text: `Enrichment Details:\n\n${formatEnrichmentForDisplay(categorized)}\n\nFull Details:\n${JSON.stringify(details, null, 2)}`
-          }]
+          content: [{ type: 'text', text: safeResult(
+            `Enrichment Details:\n\n${formatEnrichmentForDisplay(categorized)}\n\nFull Details:\n${JSON.stringify(details, null, 2)}`
+          )}]
         };
       }
 
       case 'run_enrichment': {
         const { enrichment_id, params, skip_cache = false } = args as {
-          enrichment_id: number;
-          params: Record<string, any>;
-          skip_cache?: boolean;
+          enrichment_id: number; params: Record<string, any>; skip_cache?: boolean;
         };
 
         const enrichment = await databarClient.getEnrichmentDetails(enrichment_id);
-        
+
         const validation = validateParams(enrichment, params);
         if (!validation.valid) {
-          return {
-            content: [{
-              type: 'text',
-              text: `Parameter validation failed:\n${validation.errors.join('\n')}`
-            }],
-            isError: true
-          };
+          auditLog({ timestamp: ts, tool: name, params: { enrichment_id }, result: 'error', message: 'validation failed' });
+          return { content: [{ type: 'text', text: `Parameter validation failed:\n${validation.errors.join('\n')}` }], isError: true };
         }
 
         if (!skip_cache) {
           const cachedData = cache.get(enrichment_id, params);
           if (cachedData) {
-            return {
-              content: [{
-                type: 'text',
-                text: `Enrichment completed (cached result)\n\nEnrichment: ${enrichment.name}\nCost: ${enrichment.price} credits (not charged — from cache)\n\nResults:\n${formatResults(cachedData)}`
-              }]
-            };
+            auditLog({ timestamp: ts, tool: name, params: { enrichment_id }, estimatedCost: 0, result: 'cached' });
+            return { content: [{ type: 'text', text: safeResult(
+              `Enrichment completed (cached result)\n\nEnrichment: ${enrichment.name}\nCost: 0 credits (from cache)\n\nResults:\n${formatResults(cachedData)}`
+            )}] };
           }
         }
+
+        const guard = await guardSpending(name, enrichment.price, { enrichment_id });
+        if (guard) return guard;
 
         const data = await databarClient.runEnrichmentSync(enrichment_id, params);
         cache.set(enrichment_id, params, data);
 
-        return {
-          content: [{
-            type: 'text',
-            text: `Enrichment completed successfully\n\nEnrichment: ${enrichment.name}\nCost: ${enrichment.price} credits\n\nResults:\n${formatResults(data)}`
-          }]
-        };
+        auditLog({ timestamp: ts, tool: name, params: { enrichment_id }, estimatedCost: enrichment.price, result: 'success' });
+
+        return { content: [{ type: 'text', text: safeResult(
+          `Enrichment completed successfully\n\nEnrichment: ${enrichment.name}\nCost: ${enrichment.price} credits\n\nResults:\n${formatResults(data)}`
+        )}] };
       }
 
       case 'run_bulk_enrichment': {
         const { enrichment_id, params_list } = args as {
-          enrichment_id: number;
-          params_list: Record<string, any>[];
+          enrichment_id: number; params_list: Record<string, any>[];
         };
+
+        const sizeErr = validateBulkSize(params_list, 'params_list');
+        if (sizeErr) {
+          auditLog({ timestamp: ts, tool: name, params: { enrichment_id, count: params_list?.length }, result: 'error', message: sizeErr });
+          return { content: [{ type: 'text', text: sizeErr }], isError: true };
+        }
 
         const enrichment = await databarClient.getEnrichmentDetails(enrichment_id);
+        const estimatedCost = enrichment.price * params_list.length;
+
+        const guard = await guardSpending(name, estimatedCost, { enrichment_id, count: params_list.length });
+        if (guard) return guard;
+
         const data = await databarClient.runBulkEnrichmentSync(enrichment_id, params_list);
 
-        return {
-          content: [{
-            type: 'text',
-            text: `Bulk enrichment completed\n\nEnrichment: ${enrichment.name}\nRecords: ${params_list.length}\nCost: ~${enrichment.price} credits per record\n\nResults:\n${formatResults(data)}`
-          }]
-        };
+        auditLog({ timestamp: ts, tool: name, params: { enrichment_id, count: params_list.length }, estimatedCost, result: 'success' });
+
+        return { content: [{ type: 'text', text: safeResult(
+          `Bulk enrichment completed\n\nEnrichment: ${enrichment.name}\nRecords: ${params_list.length}\nEstimated cost: ~${estimatedCost.toFixed(2)} credits\n\nResults:\n${formatResults(data)}`
+        )}] };
       }
 
       // ----------------------------------------------------------------
@@ -634,10 +565,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'search_waterfalls': {
         const { query } = args as { query: string };
-        
+        auditLog({ timestamp: ts, tool: name, params: { query }, result: 'success' });
+
         const waterfalls = await databarClient.getAllWaterfalls();
         const lowerQuery = query.toLowerCase();
-        
         const filtered = waterfalls.filter(w =>
           w.name.toLowerCase().includes(lowerQuery) ||
           w.description.toLowerCase().includes(lowerQuery) ||
@@ -645,72 +576,69 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         );
 
         if (filtered.length === 0) {
-          return {
-            content: [{
-              type: 'text',
-              text: `No waterfalls found matching "${query}".`
-            }]
-          };
+          return { content: [{ type: 'text', text: `No waterfalls found matching "${query}".` }] };
         }
 
-        return {
-          content: [{
-            type: 'text',
-            text: `Found ${filtered.length} waterfall(s):\n\n${filtered.map(formatWaterfallForDisplay).join('\n\n---\n\n')}`
-          }]
-        };
+        return { content: [{ type: 'text', text: safeResult(
+          `Found ${filtered.length} waterfall(s):\n\n${filtered.map(formatWaterfallForDisplay).join('\n\n---\n\n')}`
+        )}] };
       }
 
       case 'run_waterfall': {
         const { waterfall_identifier, params, provider_ids, email_verifier } = args as {
-          waterfall_identifier: string;
-          params: Record<string, any>;
-          provider_ids?: number[];
-          email_verifier?: number;
+          waterfall_identifier: string; params: Record<string, any>;
+          provider_ids?: number[]; email_verifier?: number;
         };
 
-        const result = await databarClient.runWaterfallSync(
-          waterfall_identifier, params, provider_ids, email_verifier
-        );
+        const waterfall = await databarClient.getWaterfallDetails(waterfall_identifier);
+        const maxPrice = Math.max(...waterfall.available_enrichments.map(e => parseFloat(e.price)));
+
+        const guard = await guardSpending(name, maxPrice, { waterfall_identifier });
+        if (guard) return guard;
+
+        const result = await databarClient.runWaterfallSync(waterfall_identifier, params, provider_ids, email_verifier);
 
         if (!result.data || result.data.length === 0) {
-          return {
-            content: [{
-              type: 'text',
-              text: 'Waterfall completed but no data was found from any provider.'
-            }]
-          };
+          auditLog({ timestamp: ts, tool: name, params: { waterfall_identifier }, result: 'success', message: 'no data' });
+          return { content: [{ type: 'text', text: 'Waterfall completed but no data was found from any provider.' }] };
         }
 
         const resultData = result.data[0];
         const totalCost = resultData.steps.reduce((sum: number, step) => sum + parseFloat(step.cost), 0);
 
-        return {
-          content: [{
-            type: 'text',
-            text: `Waterfall completed\n\nTotal Cost: ${totalCost.toFixed(2)} credits\n\nProviders Tried:\n${resultData.steps.map(s => `- ${s.provider}: ${s.result} (${s.cost} credits)`).join('\n')}\n\nResults:\n${formatResults(resultData.result)}`
-          }]
-        };
+        auditLog({ timestamp: ts, tool: name, params: { waterfall_identifier }, estimatedCost: totalCost, result: 'success' });
+
+        return { content: [{ type: 'text', text: safeResult(
+          `Waterfall completed\n\nTotal Cost: ${totalCost.toFixed(2)} credits\n\nProviders Tried:\n${resultData.steps.map(s => `- ${s.provider}: ${s.result} (${s.cost} credits)`).join('\n')}\n\nResults:\n${formatResults(resultData.result)}`
+        )}] };
       }
 
       case 'run_bulk_waterfall': {
         const { waterfall_identifier, params_list, provider_ids, email_verifier } = args as {
-          waterfall_identifier: string;
-          params_list: Record<string, any>[];
-          provider_ids?: number[];
-          email_verifier?: number;
+          waterfall_identifier: string; params_list: Record<string, any>[];
+          provider_ids?: number[]; email_verifier?: number;
         };
 
-        const data = await databarClient.runBulkWaterfallSync(
-          waterfall_identifier, params_list, provider_ids, email_verifier
-        );
+        const sizeErr = validateBulkSize(params_list, 'params_list');
+        if (sizeErr) {
+          auditLog({ timestamp: ts, tool: name, params: { waterfall_identifier, count: params_list?.length }, result: 'error', message: sizeErr });
+          return { content: [{ type: 'text', text: sizeErr }], isError: true };
+        }
 
-        return {
-          content: [{
-            type: 'text',
-            text: `Bulk waterfall completed\n\nRecords: ${params_list.length}\n\nResults:\n${formatResults(data)}`
-          }]
-        };
+        const waterfall = await databarClient.getWaterfallDetails(waterfall_identifier);
+        const maxPrice = Math.max(...waterfall.available_enrichments.map(e => parseFloat(e.price)));
+        const estimatedCost = maxPrice * params_list.length;
+
+        const guard = await guardSpending(name, estimatedCost, { waterfall_identifier, count: params_list.length });
+        if (guard) return guard;
+
+        const data = await databarClient.runBulkWaterfallSync(waterfall_identifier, params_list, provider_ids, email_verifier);
+
+        auditLog({ timestamp: ts, tool: name, params: { waterfall_identifier, count: params_list.length }, estimatedCost, result: 'success' });
+
+        return { content: [{ type: 'text', text: safeResult(
+          `Bulk waterfall completed\n\nRecords: ${params_list.length}\nEstimated max cost: ~${estimatedCost.toFixed(2)} credits\n\nResults:\n${formatResults(data)}`
+        )}] };
       }
 
       // ----------------------------------------------------------------
@@ -719,168 +647,101 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'create_table': {
         const table = await databarClient.createTable();
-        return {
-          content: [{
-            type: 'text',
-            text: `Table created successfully\n\n${formatTableForDisplay(table)}`
-          }]
-        };
+        auditLog({ timestamp: ts, tool: name, params: {}, result: 'success' });
+        return { content: [{ type: 'text', text: `Table created successfully\n\n${formatTableForDisplay(table)}` }] };
       }
 
       case 'list_tables': {
         const tables = await databarClient.getAllTables();
-
-        if (tables.length === 0) {
-          return {
-            content: [{ type: 'text', text: 'No tables found in your workspace.' }]
-          };
-        }
-
-        return {
-          content: [{
-            type: 'text',
-            text: `Found ${tables.length} table(s):\n\n${tables.map(formatTableForDisplay).join('\n\n---\n\n')}`
-          }]
-        };
+        auditLog({ timestamp: ts, tool: name, params: {}, result: 'success' });
+        if (tables.length === 0) return { content: [{ type: 'text', text: 'No tables found in your workspace.' }] };
+        return { content: [{ type: 'text', text: safeResult(
+          `Found ${tables.length} table(s):\n\n${tables.map(formatTableForDisplay).join('\n\n---\n\n')}`
+        )}] };
       }
 
       case 'get_table_columns': {
         const { table_uuid } = args as { table_uuid: string };
         const columns = await databarClient.getTableColumns(table_uuid);
-
-        if (columns.length === 0) {
-          return {
-            content: [{ type: 'text', text: 'No columns found on this table.' }]
-          };
-        }
-
-        return {
-          content: [{
-            type: 'text',
-            text: `Table has ${columns.length} column(s):\n\n${columns.map(formatColumnForDisplay).join('\n')}`
-          }]
-        };
+        auditLog({ timestamp: ts, tool: name, params: { table_uuid }, result: 'success' });
+        if (columns.length === 0) return { content: [{ type: 'text', text: 'No columns found on this table.' }] };
+        return { content: [{ type: 'text', text: safeResult(
+          `Table has ${columns.length} column(s):\n\n${columns.map(formatColumnForDisplay).join('\n')}`
+        )}] };
       }
 
       case 'get_table_rows': {
         const { table_uuid, page = 1, per_page = 1000 } = args as {
-          table_uuid: string;
-          page?: number;
-          per_page?: number;
+          table_uuid: string; page?: number; per_page?: number;
         };
-
         const data = await databarClient.getTableRows(table_uuid, page, per_page);
-
-        return {
-          content: [{
-            type: 'text',
-            text: `Table rows (page ${page}):\n\n${formatResults(data)}`
-          }]
-        };
+        auditLog({ timestamp: ts, tool: name, params: { table_uuid, page, per_page }, result: 'success' });
+        return { content: [{ type: 'text', text: safeResult(`Table rows (page ${page}):\n\n${formatResults(data)}`) }] };
       }
 
       case 'create_rows': {
         const { table_id, records, options } = args as {
-          table_id: string;
-          records: { fields: Record<string, any> }[];
-          options?: any;
+          table_id: string; records: { fields: Record<string, any> }[]; options?: any;
         };
+        const sizeErr = validateBulkSize(records, 'records');
+        if (sizeErr) return { content: [{ type: 'text', text: sizeErr }], isError: true };
 
         const response = await databarClient.createRows(table_id, { records, options });
-
-        return {
-          content: [{
-            type: 'text',
-            text: `Create rows result:\n\n${formatCreateRowsResponse(response)}`
-          }]
-        };
+        auditLog({ timestamp: ts, tool: name, params: { table_id, count: records.length }, result: 'success' });
+        return { content: [{ type: 'text', text: `Create rows result:\n\n${formatCreateRowsResponse(response)}` }] };
       }
 
       case 'patch_rows': {
         const { table_id, rows, overwrite = true } = args as {
-          table_id: string;
-          rows: { id: string; fields: Record<string, any> }[];
-          overwrite?: boolean;
+          table_id: string; rows: { id: string; fields: Record<string, any> }[]; overwrite?: boolean;
         };
+        const sizeErr = validateBulkSize(rows, 'rows');
+        if (sizeErr) return { content: [{ type: 'text', text: sizeErr }], isError: true };
 
         const response = await databarClient.patchRows(table_id, { rows, overwrite });
-
-        return {
-          content: [{
-            type: 'text',
-            text: `Patch rows result:\n\n${formatPatchRowsResponse(response)}`
-          }]
-        };
+        auditLog({ timestamp: ts, tool: name, params: { table_id, count: rows.length }, result: 'success' });
+        return { content: [{ type: 'text', text: `Patch rows result:\n\n${formatPatchRowsResponse(response)}` }] };
       }
 
       case 'upsert_rows': {
         const { table_id, rows } = args as {
-          table_id: string;
-          rows: { key: Record<string, any>; fields: Record<string, any> }[];
+          table_id: string; rows: { key: Record<string, any>; fields: Record<string, any> }[];
         };
+        const sizeErr = validateBulkSize(rows, 'rows');
+        if (sizeErr) return { content: [{ type: 'text', text: sizeErr }], isError: true };
 
         const response = await databarClient.upsertRows(table_id, { rows });
-
-        return {
-          content: [{
-            type: 'text',
-            text: `Upsert rows result:\n\n${formatUpsertRowsResponse(response)}`
-          }]
-        };
+        auditLog({ timestamp: ts, tool: name, params: { table_id, count: rows.length }, result: 'success' });
+        return { content: [{ type: 'text', text: `Upsert rows result:\n\n${formatUpsertRowsResponse(response)}` }] };
       }
 
       case 'get_table_enrichments': {
         const { table_uuid } = args as { table_uuid: string };
         const enrichments = await databarClient.getTableEnrichments(table_uuid);
-
-        if (enrichments.length === 0) {
-          return {
-            content: [{ type: 'text', text: 'No enrichments configured on this table.' }]
-          };
-        }
-
-        return {
-          content: [{
-            type: 'text',
-            text: `Table has ${enrichments.length} enrichment(s):\n\n${enrichments.map(formatTableEnrichmentForDisplay).join('\n')}`
-          }]
-        };
+        auditLog({ timestamp: ts, tool: name, params: { table_uuid }, result: 'success' });
+        if (enrichments.length === 0) return { content: [{ type: 'text', text: 'No enrichments configured on this table.' }] };
+        return { content: [{ type: 'text', text: `Table has ${enrichments.length} enrichment(s):\n\n${enrichments.map(formatTableEnrichmentForDisplay).join('\n')}` }] };
       }
 
       case 'add_table_enrichment': {
         const { table_uuid, enrichment_id, mapping } = args as {
-          table_uuid: string;
-          enrichment_id: number;
-          mapping: Record<string, any>;
+          table_uuid: string; enrichment_id: number; mapping: Record<string, any>;
         };
-
-        const result = await databarClient.addTableEnrichment(table_uuid, {
-          enrichment: enrichment_id,
-          mapping
-        });
-
-        return {
-          content: [{
-            type: 'text',
-            text: `Enrichment added to table successfully\n\n${formatResults(result)}`
-          }]
-        };
+        const result = await databarClient.addTableEnrichment(table_uuid, { enrichment: enrichment_id, mapping });
+        auditLog({ timestamp: ts, tool: name, params: { table_uuid, enrichment_id }, result: 'success' });
+        return { content: [{ type: 'text', text: `Enrichment added to table successfully\n\n${formatResults(result)}` }] };
       }
 
       case 'run_table_enrichment': {
-        const { table_uuid, enrichment_id } = args as {
-          table_uuid: string;
-          enrichment_id: string;
-        };
+        const { table_uuid, enrichment_id } = args as { table_uuid: string; enrichment_id: string };
+
+        // Table enrichments run on all rows — use a conservative cost estimate
+        const guard = await guardSpending(name, 0, { table_uuid, enrichment_id });
+        if (guard) return guard;
 
         const result = await databarClient.runTableEnrichment(table_uuid, enrichment_id);
-
-        return {
-          content: [{
-            type: 'text',
-            text: `Table enrichment triggered successfully\n\n${formatResults(result)}`
-          }]
-        };
+        auditLog({ timestamp: ts, tool: name, params: { table_uuid, enrichment_id }, result: 'success' });
+        return { content: [{ type: 'text', text: `Table enrichment triggered successfully\n\n${formatResults(result)}` }] };
       }
 
       // ----------------------------------------------------------------
@@ -889,27 +750,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'get_user_balance': {
         const user = await databarClient.getUserInfo();
-        
+        auditLog({ timestamp: ts, tool: name, params: {}, result: 'success' });
         return {
-          content: [{
-            type: 'text',
-            text: `User Account Information:\n\nName: ${user.first_name || 'N/A'}\nEmail: ${user.email}\nBalance: ${user.balance} credits\nPlan: ${user.plan}`
-          }]
+          content: [{ type: 'text', text: `User Account Information:\n\nName: ${user.first_name || 'N/A'}\nEmail: ${user.email}\nBalance: ${user.balance} credits\nPlan: ${user.plan}` }]
         };
       }
 
       default:
-        return {
-          content: [{ type: 'text', text: `Unknown tool: ${name}` }],
-          isError: true
-        };
+        return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
     }
   } catch (error: any) {
+    auditLog({ timestamp: ts, tool: name, params: args as Record<string, any>, result: 'error', message: error.message });
     return {
-      content: [{
-        type: 'text',
-        text: `Error: ${error.message || 'Unknown error occurred'}`
-      }],
+      content: [{ type: 'text', text: `Error: ${error.message || 'Unknown error occurred'}` }],
       isError: true
     };
   }
@@ -923,6 +776,7 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('Databar MCP Server running on stdio');
+  console.error(`Spending guard: max_cost_per_request=${spendingConfig.maxCostPerRequest ?? 'unlimited'}, min_balance=${spendingConfig.minBalance}`);
 }
 
 main().catch((error) => {
