@@ -34,6 +34,7 @@ import {
 import {
   loadSpendingConfig,
   checkSpendingGuard,
+  unsafeModeWarning,
   validateBulkSize,
   sanitizeResult,
   SpendingConfig
@@ -169,7 +170,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'run_bulk_enrichment',
-    description: 'Execute an enrichment on multiple inputs at once (max 50). Provide an array of parameter objects. Subject to spending limits.',
+    description: 'Execute an enrichment on multiple inputs at once (max 100). Provide an array of parameter objects. Subject to spending limits.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -180,8 +181,8 @@ const TOOLS: Tool[] = [
         params_list: {
           type: 'array',
           items: { type: 'object', additionalProperties: true },
-          description: 'Array of parameter objects, one per record (max 50)',
-          maxItems: 50
+          description: 'Array of parameter objects, one per record (max 100)',
+          maxItems: 100
         }
       },
       required: ['enrichment_id', 'params_list']
@@ -233,7 +234,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'run_bulk_waterfall',
-    description: 'Execute a waterfall enrichment on multiple inputs at once (max 50). Subject to spending limits.',
+    description: 'Execute a waterfall enrichment on multiple inputs at once (max 100). Subject to spending limits.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -244,8 +245,8 @@ const TOOLS: Tool[] = [
         params_list: {
           type: 'array',
           items: { type: 'object', additionalProperties: true },
-          description: 'Array of parameter objects, one per record (max 50)',
-          maxItems: 50
+          description: 'Array of parameter objects, one per record (max 100)',
+          maxItems: 100
         },
         provider_ids: {
           type: 'array',
@@ -298,7 +299,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'create_rows',
-    description: 'Insert new rows into a table (max 50 per request).',
+    description: 'Insert new rows into a table (max 100 per request).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -310,8 +311,8 @@ const TOOLS: Tool[] = [
             properties: { fields: { type: 'object', additionalProperties: true } },
             required: ['fields']
           },
-          description: 'Array of row records (max 50)',
-          maxItems: 50
+          description: 'Array of row records (max 100)',
+          maxItems: 100
         },
         options: {
           type: 'object',
@@ -333,7 +334,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'patch_rows',
-    description: 'Update specific fields on existing rows by row ID (max 50 per request).',
+    description: 'Update specific fields on existing rows by row ID (max 100 per request).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -348,8 +349,8 @@ const TOOLS: Tool[] = [
             },
             required: ['id', 'fields']
           },
-          description: 'Array of patch operations (max 50)',
-          maxItems: 50
+          description: 'Array of patch operations (max 100)',
+          maxItems: 100
         },
         overwrite: { type: 'boolean', description: 'Overwrite non-empty cells (default: true)', default: true }
       },
@@ -358,7 +359,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'upsert_rows',
-    description: 'Insert or update rows by matching key (max 50 per request).',
+    description: 'Insert or update rows by matching key (max 100 per request).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -373,8 +374,8 @@ const TOOLS: Tool[] = [
             },
             required: ['key', 'fields']
           },
-          description: 'Array of upsert operations (max 50)',
-          maxItems: 50
+          description: 'Array of upsert operations (max 100)',
+          maxItems: 100
         }
       },
       required: ['table_id', 'rows']
@@ -430,7 +431,7 @@ const TOOLS: Tool[] = [
 // ============================================================================
 
 const server = new Server(
-  { name: 'databar-mcp-server', version: '1.2.0' },
+  { name: 'databar-mcp-server', version: '1.3.0' },
   { capabilities: { tools: {} } }
 );
 
@@ -528,8 +529,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         auditLog({ timestamp: ts, tool: name, params: { enrichment_id }, estimatedCost: enrichment.price, result: 'success' });
 
+        const warn = unsafeModeWarning(spendingConfig, enrichment.price);
         return { content: [{ type: 'text', text: safeResult(
-          `Enrichment completed successfully\n\nEnrichment: ${enrichment.name}\nCost: ${enrichment.price} credits\n\nResults:\n${formatResults(data)}`
+          `${warn}Enrichment completed successfully\n\nEnrichment: ${enrichment.name}\nCost: ${enrichment.price} credits\n\nResults:\n${formatResults(data)}`
         )}] };
       }
 
@@ -554,8 +556,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         auditLog({ timestamp: ts, tool: name, params: { enrichment_id, count: params_list.length }, estimatedCost, result: 'success' });
 
+        const warn = unsafeModeWarning(spendingConfig, estimatedCost, params_list.length);
         return { content: [{ type: 'text', text: safeResult(
-          `Bulk enrichment completed\n\nEnrichment: ${enrichment.name}\nRecords: ${params_list.length}\nEstimated cost: ~${estimatedCost.toFixed(2)} credits\n\nResults:\n${formatResults(data)}`
+          `${warn}Bulk enrichment completed\n\nEnrichment: ${enrichment.name}\nRecords: ${params_list.length}\nEstimated cost: ~${estimatedCost.toFixed(2)} credits\n\nResults:\n${formatResults(data)}`
         )}] };
       }
 
@@ -608,8 +611,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         auditLog({ timestamp: ts, tool: name, params: { waterfall_identifier }, estimatedCost: totalCost, result: 'success' });
 
+        const warn = unsafeModeWarning(spendingConfig, totalCost);
         return { content: [{ type: 'text', text: safeResult(
-          `Waterfall completed\n\nTotal Cost: ${totalCost.toFixed(2)} credits\n\nProviders Tried:\n${resultData.steps.map(s => `- ${s.provider}: ${s.result} (${s.cost} credits)`).join('\n')}\n\nResults:\n${formatResults(resultData.result)}`
+          `${warn}Waterfall completed\n\nTotal Cost: ${totalCost.toFixed(2)} credits\n\nProviders Tried:\n${resultData.steps.map(s => `- ${s.provider}: ${s.result} (${s.cost} credits)`).join('\n')}\n\nResults:\n${formatResults(resultData.result)}`
         )}] };
       }
 
@@ -636,8 +640,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         auditLog({ timestamp: ts, tool: name, params: { waterfall_identifier, count: params_list.length }, estimatedCost, result: 'success' });
 
+        const warn = unsafeModeWarning(spendingConfig, estimatedCost, params_list.length);
         return { content: [{ type: 'text', text: safeResult(
-          `Bulk waterfall completed\n\nRecords: ${params_list.length}\nEstimated max cost: ~${estimatedCost.toFixed(2)} credits\n\nResults:\n${formatResults(data)}`
+          `${warn}Bulk waterfall completed\n\nRecords: ${params_list.length}\nEstimated max cost: ~${estimatedCost.toFixed(2)} credits\n\nResults:\n${formatResults(data)}`
         )}] };
       }
 
@@ -776,6 +781,7 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('Databar MCP Server running on stdio');
+  console.error(`Mode: ${spendingConfig.safeMode ? 'safe (balance checked before each run)' : 'unsafe (no balance checks, cost warnings only)'}`);
   console.error(`Spending guard: max_cost_per_request=${spendingConfig.maxCostPerRequest ?? 'unlimited'}, min_balance=${spendingConfig.minBalance}`);
 }
 

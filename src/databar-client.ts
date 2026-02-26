@@ -29,6 +29,16 @@ import {
   DatabarError
 } from './types.js';
 
+const API_ROW_BATCH = 50;
+
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
+  }
+  return chunks;
+}
+
 export class DatabarClient {
   private client: AxiosInstance;
   private config: DatabarConfig;
@@ -449,55 +459,87 @@ export class DatabarClient {
     }
   }
 
+  /**
+   * Insert rows, auto-batching into chunks of 50 (API limit).
+   */
   async createRows(
     tableId: string,
     request: CreateRowsRequest
   ): Promise<CreateRowsResponse> {
-    try {
-      const response = await this.withRetry(() =>
-        this.client.post<CreateRowsResponse>(
-          `/tables/${tableId}/rows`,
-          request
-        )
-      );
-      return response.data;
-    } catch (error) {
-      this.handleError(error);
+    const chunks = chunkArray(request.records, API_ROW_BATCH);
+    const allCreated: CreateRowsResponse['created'] = [];
+    const allErrors: CreateRowsResponse['errors'] = [];
+
+    for (const chunk of chunks) {
+      try {
+        const response = await this.withRetry(() =>
+          this.client.post<CreateRowsResponse>(
+            `/tables/${tableId}/rows`,
+            { records: chunk, options: request.options }
+          )
+        );
+        if (response.data.created) allCreated.push(...response.data.created);
+        if (response.data.errors) allErrors.push(...response.data.errors);
+      } catch (error) {
+        this.handleError(error);
+      }
     }
+
+    return { created: allCreated, errors: allErrors };
   }
 
+  /**
+   * Patch rows, auto-batching into chunks of 50 (API limit).
+   */
   async patchRows(
     tableId: string,
     request: PatchRowsRequest
   ): Promise<PatchRowsResponse> {
-    try {
-      const response = await this.withRetry(() =>
-        this.client.patch<PatchRowsResponse>(
-          `/tables/${tableId}/rows`,
-          request
-        )
-      );
-      return response.data;
-    } catch (error) {
-      this.handleError(error);
+    const chunks = chunkArray(request.rows, API_ROW_BATCH);
+    const allResults: PatchRowsResponse['results'] = [];
+
+    for (const chunk of chunks) {
+      try {
+        const response = await this.withRetry(() =>
+          this.client.patch<PatchRowsResponse>(
+            `/tables/${tableId}/rows`,
+            { rows: chunk, return_rows: request.return_rows, overwrite: request.overwrite }
+          )
+        );
+        if (response.data.results) allResults.push(...response.data.results);
+      } catch (error) {
+        this.handleError(error);
+      }
     }
+
+    return { results: allResults };
   }
 
+  /**
+   * Upsert rows, auto-batching into chunks of 50 (API limit).
+   */
   async upsertRows(
     tableId: string,
     request: UpsertRowsRequest
   ): Promise<UpsertRowsResponse> {
-    try {
-      const response = await this.withRetry(() =>
-        this.client.post<UpsertRowsResponse>(
-          `/tables/${tableId}/rows:upsert`,
-          request
-        )
-      );
-      return response.data;
-    } catch (error) {
-      this.handleError(error);
+    const chunks = chunkArray(request.rows, API_ROW_BATCH);
+    const allResults: UpsertRowsResponse['results'] = [];
+
+    for (const chunk of chunks) {
+      try {
+        const response = await this.withRetry(() =>
+          this.client.post<UpsertRowsResponse>(
+            `/tables/${tableId}/rows:upsert`,
+            { rows: chunk }
+          )
+        );
+        if (response.data.results) allResults.push(...response.data.results);
+      } catch (error) {
+        this.handleError(error);
+      }
     }
+
+    return { results: allResults };
   }
 
   // ============================================================================
