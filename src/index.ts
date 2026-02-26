@@ -35,7 +35,8 @@ import {
   loadSpendingConfig,
   checkSpendingGuard,
   unsafeModeWarning,
-  validateBulkSize,
+  validateBulkArray,
+  validateRowBatchSize,
   sanitizeResult,
   SpendingConfig
 } from './guards.js';
@@ -170,7 +171,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'run_bulk_enrichment',
-    description: 'Execute an enrichment on multiple inputs at once (max 100). Provide an array of parameter objects. Subject to spending limits.',
+    description: 'Execute an enrichment on multiple inputs at once. Provide an array of parameter objects. Subject to spending limits.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -181,8 +182,7 @@ const TOOLS: Tool[] = [
         params_list: {
           type: 'array',
           items: { type: 'object', additionalProperties: true },
-          description: 'Array of parameter objects, one per record (max 100)',
-          maxItems: 100
+          description: 'Array of parameter objects, one per record'
         }
       },
       required: ['enrichment_id', 'params_list']
@@ -234,7 +234,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'run_bulk_waterfall',
-    description: 'Execute a waterfall enrichment on multiple inputs at once (max 100). Subject to spending limits.',
+    description: 'Execute a waterfall enrichment on multiple inputs at once. Subject to spending limits.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -245,8 +245,7 @@ const TOOLS: Tool[] = [
         params_list: {
           type: 'array',
           items: { type: 'object', additionalProperties: true },
-          description: 'Array of parameter objects, one per record (max 100)',
-          maxItems: 100
+          description: 'Array of parameter objects, one per record'
         },
         provider_ids: {
           type: 'array',
@@ -540,7 +539,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           enrichment_id: number; params_list: Record<string, any>[];
         };
 
-        const sizeErr = validateBulkSize(params_list, 'params_list');
+        const sizeErr = validateBulkArray(params_list, 'params_list');
         if (sizeErr) {
           auditLog({ timestamp: ts, tool: name, params: { enrichment_id, count: params_list?.length }, result: 'error', message: sizeErr });
           return { content: [{ type: 'text', text: sizeErr }], isError: true };
@@ -623,7 +622,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           provider_ids?: number[]; email_verifier?: number;
         };
 
-        const sizeErr = validateBulkSize(params_list, 'params_list');
+        const sizeErr = validateBulkArray(params_list, 'params_list');
         if (sizeErr) {
           auditLog({ timestamp: ts, tool: name, params: { waterfall_identifier, count: params_list?.length }, result: 'error', message: sizeErr });
           return { content: [{ type: 'text', text: sizeErr }], isError: true };
@@ -688,7 +687,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const { table_id, records, options } = args as {
           table_id: string; records: { fields: Record<string, any> }[]; options?: any;
         };
-        const sizeErr = validateBulkSize(records, 'records');
+        const sizeErr = validateRowBatchSize(records, 'records');
         if (sizeErr) return { content: [{ type: 'text', text: sizeErr }], isError: true };
 
         const response = await databarClient.createRows(table_id, { records, options });
@@ -700,7 +699,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const { table_id, rows, overwrite = true } = args as {
           table_id: string; rows: { id: string; fields: Record<string, any> }[]; overwrite?: boolean;
         };
-        const sizeErr = validateBulkSize(rows, 'rows');
+        const sizeErr = validateRowBatchSize(rows, 'rows');
         if (sizeErr) return { content: [{ type: 'text', text: sizeErr }], isError: true };
 
         const response = await databarClient.patchRows(table_id, { rows, overwrite });
@@ -712,7 +711,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const { table_id, rows } = args as {
           table_id: string; rows: { key: Record<string, any>; fields: Record<string, any> }[];
         };
-        const sizeErr = validateBulkSize(rows, 'rows');
+        const sizeErr = validateRowBatchSize(rows, 'rows');
         if (sizeErr) return { content: [{ type: 'text', text: sizeErr }], isError: true };
 
         const response = await databarClient.upsertRows(table_id, { rows });

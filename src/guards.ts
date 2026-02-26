@@ -92,20 +92,35 @@ export function unsafeModeWarning(
 // Input Validation
 // ============================================================================
 
-const MAX_BULK_ITEMS = 100;
-const API_BATCH_SIZE = 50;
+const MAX_ROW_ITEMS = 100;
 
-export { API_BATCH_SIZE };
-
-export function validateBulkSize(items: any[], label: string): string | null {
+/**
+ * Validate that an array is non-empty.
+ * For enrichments/waterfalls there's no backend size limit.
+ */
+export function validateBulkArray(items: any[], label: string): string | null {
   if (!Array.isArray(items)) {
     return `${label} must be an array.`;
   }
   if (items.length === 0) {
     return `${label} cannot be empty.`;
   }
-  if (items.length > MAX_BULK_ITEMS) {
-    return `${label} has ${items.length} items, but the maximum is ${MAX_BULK_ITEMS} per request.`;
+  return null;
+}
+
+/**
+ * Validate row operations — the Databar API limits these to 50 per request.
+ * We accept up to MAX_ROW_ITEMS and auto-batch into chunks of 50.
+ */
+export function validateRowBatchSize(items: any[], label: string): string | null {
+  if (!Array.isArray(items)) {
+    return `${label} must be an array.`;
+  }
+  if (items.length === 0) {
+    return `${label} cannot be empty.`;
+  }
+  if (items.length > MAX_ROW_ITEMS) {
+    return `${label} has ${items.length} items, but the maximum is ${MAX_ROW_ITEMS} per request. The API batches these into groups of 50 automatically.`;
   }
   return null;
 }
