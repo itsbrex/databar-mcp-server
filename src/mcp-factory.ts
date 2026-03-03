@@ -214,13 +214,13 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'get_table_rows',
-    description: 'Get rows from a table with pagination. Returns up to 1000 rows per page by default.',
+    description: 'Get rows from a table with pagination. Returns up to 100 rows per page by default (max 500).',
     inputSchema: {
       type: 'object',
       properties: {
         table_uuid: { type: 'string', description: 'The UUID of the table' },
         page: { type: 'number', description: 'Page number (default: 1)', default: 1 },
-        per_page: { type: 'number', description: 'Rows per page (default: 1000, max: 1000)', default: 1000 }
+        per_page: { type: 'number', description: 'Rows per page (default: 100, max: 500)', default: 100 }
       },
       required: ['table_uuid']
     }
@@ -595,7 +595,7 @@ export function createMcpServer(apiKey: string): Server {
         }
 
         case 'get_table_rows': {
-          const { table_uuid, page = 1, per_page = 1000 } = args as {
+          const { table_uuid, page = 1, per_page = 100 } = args as {
             table_uuid: string; page?: number; per_page?: number;
           };
           const data = await databarClient.getTableRows(table_uuid, page, per_page);

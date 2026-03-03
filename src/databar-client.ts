@@ -445,7 +445,7 @@ export class DatabarClient {
   async getTableRows(
     tableUuid: string,
     page: number = 1,
-    perPage: number = 1000
+    perPage: number = 100
   ): Promise<any> {
     try {
       const response = await this.withRetry(() =>
