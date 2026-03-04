@@ -225,13 +225,27 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'get_table_rows',
-    description: 'Get rows from a table with pagination. Returns up to 100 rows per page by default (max 500).',
+    description: 'Get rows from a table with pagination and optional filtering. Returns up to 100 rows per page by default (max 500). Supports Airtable-style structured filters with 5 operators: equals, contains, not_equals, is_empty, is_not_empty. Multiple filters use AND logic.',
     inputSchema: {
       type: 'object',
       properties: {
         table_uuid: { type: 'string', description: 'The UUID of the table' },
         page: { type: 'number', description: 'Page number (default: 1)', default: 1 },
-        per_page: { type: 'number', description: 'Rows per page (default: 100, max: 500)', default: 100 }
+        per_page: { type: 'number', description: 'Rows per page (default: 100, max: 500)', default: 100 },
+        filter: {
+          type: 'object',
+          description: 'Filter rows by column values (AND logic). Keys are column names, values are objects with one operator. Operators: equals, contains (case-insensitive), not_equals, is_empty (true), is_not_empty (true). Examples: {"company":{"contains":"tech"}}, {"status":{"equals":"active"}}, {"email":{"is_not_empty":true}}, {"name":{"contains":"a"},"revenue":{"equals":"5000"}}',
+          additionalProperties: {
+            type: 'object',
+            properties: {
+              equals: { type: 'string', description: 'Exact match' },
+              contains: { type: 'string', description: 'Substring match (case-insensitive)' },
+              not_equals: { type: 'string', description: 'Not equal to value' },
+              is_empty: { type: 'boolean', description: 'True to find rows where column is empty/null' },
+              is_not_empty: { type: 'boolean', description: 'True to find rows where column has a value' }
+            }
+          }
+        }
       },
       required: ['table_uuid']
     }
@@ -611,11 +625,11 @@ export function createMcpServer(apiKey: string): Server {
         }
 
         case 'get_table_rows': {
-          const { table_uuid, page = 1, per_page = 100 } = args as {
-            table_uuid: string; page?: number; per_page?: number;
+          const { table_uuid, page = 1, per_page = 100, filter } = args as {
+            table_uuid: string; page?: number; per_page?: number; filter?: Record<string, any>;
           };
-          const data = await databarClient.getTableRows(table_uuid, page, per_page);
-          auditLog({ timestamp: ts, tool: name, params: { table_uuid, page, per_page }, result: 'success' });
+          const data = await databarClient.getTableRows(table_uuid, page, per_page, filter);
+          auditLog({ timestamp: ts, tool: name, params: { table_uuid, page, per_page, filter }, result: 'success' });
           return { content: [{ type: 'text', text: safeResult(`Table rows (page ${page}):\n\n${formatResults(data)}`) }] };
         }
 

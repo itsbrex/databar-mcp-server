@@ -449,13 +449,16 @@ export class DatabarClient {
   async getTableRows(
     tableUuid: string,
     page: number = 1,
-    perPage: number = 100
+    perPage: number = 100,
+    filter?: Record<string, any>
   ): Promise<any> {
     try {
+      const params: Record<string, any> = { page, per_page: perPage };
+      if (filter) {
+        params.filter = JSON.stringify(filter);
+      }
       const response = await this.withRetry(() =>
-        this.client.get(`/table/${tableUuid}/rows`, {
-          params: { page, per_page: perPage }
-        })
+        this.client.get(`/table/${tableUuid}/rows`, { params })
       );
       return response.data;
     } catch (error) {
