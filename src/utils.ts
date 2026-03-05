@@ -133,7 +133,7 @@ export function filterByCategory(
  * Format enrichment for display
  */
 export function formatEnrichmentForDisplay(enrichment: CategorizedEnrichment): string {
-  return [
+  const lines = [
     `ID: ${enrichment.id}`,
     `Name: ${enrichment.name}`,
     `Category: ${enrichment.category}`,
@@ -141,7 +141,22 @@ export function formatEnrichmentForDisplay(enrichment: CategorizedEnrichment): s
     `Data Source: ${enrichment.data_source}`,
     `Price: ${enrichment.price} credits`,
     enrichment.params ? `Required Parameters: ${enrichment.params.filter(p => p.is_required).map(p => p.name).join(', ')}` : ''
-  ].filter(Boolean).join('\n');
+  ];
+
+  const choiceParams = enrichment.params?.filter(p =>
+    p.choices && (p.type_field === 'select' || p.type_field === 'mselect')
+  );
+  if (choiceParams && choiceParams.length > 0) {
+    const parts = choiceParams.map(p => {
+      if (p.choices?.mode === 'inline' && p.choices.items) {
+        return `${p.name}: ${p.choices.items.map(i => i.id).join(', ')}`;
+      }
+      return `${p.name}: use get_param_choices to browse`;
+    });
+    lines.push(`Select Parameters: ${parts.join('; ')}`);
+  }
+
+  return lines.filter(Boolean).join('\n');
 }
 
 /**
@@ -195,9 +210,22 @@ export function validateParams(
       missing.push(param.name);
       errors.push(`Missing required parameter: ${param.name}`);
     }
+
+    const value = providedParams[param.name];
+    if (value != null && param.choices?.mode === 'inline' && param.choices.items) {
+      const validIds = param.choices.items.map(i => i.id);
+      const valuesToCheck = Array.isArray(value) ? value : [value];
+      for (const v of valuesToCheck) {
+        if (!validIds.includes(String(v))) {
+          errors.push(
+            `Invalid value "${v}" for parameter "${param.name}". Valid options: ${validIds.join(', ')}`
+          );
+        }
+      }
+    }
   }
 
-  return { valid: missing.length === 0, missing, errors };
+  return { valid: errors.length === 0, missing, errors };
 }
 
 /**

@@ -122,6 +122,38 @@ const TOOLS: Tool[] = [
     }
   },
   {
+    name: 'get_param_choices',
+    description: 'Get available choices for a select/mselect enrichment parameter. Supports search and pagination. Use this when get_enrichment_details shows a parameter with choices.mode = "remote". For inline choices, the values are already included in get_enrichment_details.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        enrichment_id: {
+          type: 'number',
+          description: 'The enrichment ID'
+        },
+        param_name: {
+          type: 'string',
+          description: 'The parameter name (slug)'
+        },
+        q: {
+          type: 'string',
+          description: 'Optional search query to filter choices by id or name'
+        },
+        page: {
+          type: 'number',
+          description: 'Page number (default: 1)',
+          default: 1
+        },
+        limit: {
+          type: 'number',
+          description: 'Items per page (default: 100, max: 500)',
+          default: 100
+        }
+      },
+      required: ['enrichment_id', 'param_name']
+    }
+  },
+  {
     name: 'search_waterfalls',
     description: 'Search available waterfall enrichments. Waterfalls try multiple data providers in sequence until one succeeds, maximizing data retrieval success rate.',
     inputSchema: {
@@ -469,7 +501,20 @@ export function createMcpServer(apiKey: string): Server {
             id: categorized.id, name: categorized.name, category: categorized.category,
             description: categorized.description, data_source: categorized.data_source,
             price: categorized.price, auth_method: categorized.auth_method,
-            parameters: categorized.params?.map(p => ({ name: p.name, required: p.is_required, type: p.type_field, description: p.description })),
+            parameters: categorized.params?.map(p => {
+              const param: Record<string, any> = {
+                name: p.name, required: p.is_required, type: p.type_field, description: p.description,
+              };
+              if (p.choices) {
+                param.choices = { mode: p.choices.mode };
+                if (p.choices.mode === 'inline' && p.choices.items) {
+                  param.choices.values = p.choices.items.map((i: { id: string; name: string }) => `${i.id} (${i.name})`);
+                } else if (p.choices.mode === 'remote') {
+                  param.choices.hint = `Use get_param_choices tool with enrichment_id=${enrichment_id} and param_name="${p.name}" to browse available values`;
+                }
+              }
+              return param;
+            }),
             response_fields: categorized.response_fields?.map(f => ({ name: f.name, type: f.type_field }))
           };
           return {
@@ -528,6 +573,23 @@ export function createMcpServer(apiKey: string): Server {
           return { content: [{ type: 'text', text: safeResult(
             `${warn}Bulk enrichment completed\n\nEnrichment: ${enrichment.name}\nRecords: ${params_list.length}\nEstimated cost: ~${estimatedCost.toFixed(2)} credits\n\nResults:\n${formatResults(data)}`
           )}] };
+        }
+
+        case 'get_param_choices': {
+          const { enrichment_id, param_name, q, page = 1, limit = 100 } = args as {
+            enrichment_id: number; param_name: string; q?: string; page?: number; limit?: number;
+          };
+          auditLog({ timestamp: ts, tool: name, params: { enrichment_id, param_name, q, page, limit }, result: 'success' });
+          const choices = await databarClient.getParamChoices(enrichment_id, param_name, { q, page, limit });
+          const lines = choices.items.map(item => `- ${item.id}: ${item.name}`);
+          const header = q
+            ? `Choices for "${param_name}" (search: "${q}", page ${choices.page}/${Math.ceil(choices.total_count / choices.limit) || 1}, total: ${choices.total_count}):`
+            : `Choices for "${param_name}" (page ${choices.page}/${Math.ceil(choices.total_count / choices.limit) || 1}, total: ${choices.total_count}):`;
+          return {
+            content: [{ type: 'text', text: safeResult(
+              `${header}\n\n${lines.length > 0 ? lines.join('\n') : 'No choices found.'}${choices.has_next_page ? `\n\n(More results available — use page=${choices.page + 1})` : ''}`
+            )}]
+          };
         }
 
         case 'search_waterfalls': {

@@ -6,11 +6,31 @@
 // Enrichment Types
 // ============================================================================
 
+export interface ChoiceItem {
+  id: string;
+  name: string;
+}
+
+export interface ParamChoices {
+  mode: 'inline' | 'remote';
+  items?: ChoiceItem[] | null;
+  endpoint?: string | null;
+}
+
+export interface ChoicesResponse {
+  items: ChoiceItem[];
+  page: number;
+  limit: number;
+  has_next_page: boolean;
+  total_count: number;
+}
+
 export interface EnrichmentParam {
   name: string;
   is_required: boolean;
   type_field: string;
   description: string;
+  choices?: ParamChoices | null;
 }
 
 export interface EnrichmentResponseField {

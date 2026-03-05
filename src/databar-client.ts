@@ -11,6 +11,7 @@ import {
   EnrichmentRunResponse,
   TaskResponse,
   TaskStatus,
+  ChoicesResponse,
   Table,
   Column,
   TableEnrichment,
@@ -247,6 +248,29 @@ export class DatabarClient {
   ): Promise<any> {
     const runResponse = await this.runBulkEnrichment(enrichmentId, paramsList);
     return await this.pollTaskUntilComplete(runResponse.task_id);
+  }
+
+  async getParamChoices(
+    enrichmentId: number,
+    paramName: string,
+    options?: { q?: string; page?: number; limit?: number }
+  ): Promise<ChoicesResponse> {
+    try {
+      const params: Record<string, any> = {
+        page: options?.page ?? 1,
+        limit: options?.limit ?? 100,
+      };
+      if (options?.q) params.q = options.q;
+      const response = await this.withRetry(() =>
+        this.client.get<ChoicesResponse>(
+          `/enrichments/${enrichmentId}/params/${paramName}/choices`,
+          { params }
+        )
+      );
+      return response.data;
+    } catch (error) {
+      this.handleError(error);
+    }
   }
 
   // ============================================================================
