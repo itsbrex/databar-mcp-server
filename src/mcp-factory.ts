@@ -379,13 +379,35 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'add_table_enrichment',
-    description: 'Add an enrichment to a table with column mapping.',
+    description: `Add an enrichment to a table with a parameter-to-column mapping.
+
+IMPORTANT — mapping format:
+Each key is an enrichment parameter name. Each value is one of:
+  • { "type": "mapping", "value": "<column-name>" }  — read value from a table column per row. Use the human-readable column name (e.g. "email"). The server accepts column names directly.
+  • { "type": "simple", "value": "<static-value>" }  — pass the same hardcoded value for every row.
+
+WORKFLOW:
+1. Call get_enrichment_details to see the parameter names.
+2. Call get_table_columns to see available column names.
+3. Build the mapping using column names (not UUIDs).
+4. The returned enrichment_id from this call is the TABLE-ENRICHMENT id — use it with run_table_enrichment (NOT the original enrichment_id).`,
     inputSchema: {
       type: 'object',
       properties: {
         table_uuid: { type: 'string', description: 'The UUID of the table' },
-        enrichment_id: { type: 'number', description: 'The enrichment ID to add' },
-        mapping: { type: 'object', description: 'Parameter-to-column mapping', additionalProperties: true }
+        enrichment_id: { type: 'number', description: 'The enrichment ID to add (from search_enrichments or get_enrichment_details)' },
+        mapping: {
+          type: 'object',
+          description: 'Parameter-to-column mapping. Keys = enrichment param names. Values = { type: "mapping", value: "column-name" } or { type: "simple", value: "static-value" }',
+          additionalProperties: {
+            type: 'object',
+            properties: {
+              type: { type: 'string', enum: ['mapping', 'simple'] },
+              value: { type: 'string' }
+            },
+            required: ['type', 'value']
+          }
+        }
       },
       required: ['table_uuid', 'enrichment_id', 'mapping']
     }
@@ -740,9 +762,22 @@ export function createMcpServer(apiKey: string): Server {
           const { table_uuid, enrichment_id, mapping } = args as {
             table_uuid: string; enrichment_id: number; mapping: Record<string, any>;
           };
+
+          // Snapshot before, so we can detect the new table-enrichment ID
+          const beforeEnrichments = await databarClient.getTableEnrichments(table_uuid);
+          const beforeIds = new Set(beforeEnrichments.map(e => e.id));
+
           const result = await databarClient.addTableEnrichment(table_uuid, { enrichment: enrichment_id, mapping });
+
+          // Fetch the updated list and surface the new table-enrichment ID
+          const afterEnrichments = await databarClient.getTableEnrichments(table_uuid);
+          const newEnrichments = afterEnrichments.filter(e => !beforeIds.has(e.id));
+          const added = newEnrichments.length > 0 ? newEnrichments[0] : afterEnrichments[afterEnrichments.length - 1];
+
           auditLog({ timestamp: ts, tool: name, params: { table_uuid, enrichment_id }, result: 'success' });
-          return { content: [{ type: 'text', text: `Enrichment added to table successfully\n\n${formatResults(result)}` }] };
+          return { content: [{ type: 'text', text: safeResult(
+            `Enrichment added to table successfully.\n\nTable enrichment ID: ${added?.id ?? 'unknown'}\nName: ${added?.name ?? 'unknown'}\n\nUse this table enrichment ID (${added?.id ?? '<id>'}) with run_table_enrichment to trigger a run.`
+          )}] };
         }
 
         case 'run_table_enrichment': {
