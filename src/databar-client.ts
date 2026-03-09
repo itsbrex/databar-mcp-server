@@ -503,10 +503,14 @@ export class DatabarClient {
 
     for (const chunk of chunks) {
       try {
+        const body: Record<string, any> = { rows: chunk };
+        if (request.options) {
+          body.options = request.options;
+        }
         const response = await this.withRetry(() =>
           this.client.post<CreateRowsResponse | { results: Array<{ index: number; id: string | null; action: string }> }>(
             `/table/${tableId}/rows`,
-            { rows: chunk }
+            body
           )
         );
         const data = response.data as CreateRowsResponse & { results?: Array<{ index: number; id: string | null; action: string }> };

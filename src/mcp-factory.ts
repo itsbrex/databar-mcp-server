@@ -284,26 +284,25 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'create_rows',
-    description: 'Insert new rows into a table (max 100 per request).',
+    description: 'Insert new rows into a table (max 100 per request). To add new columns to an existing table, set options.allow_new_columns to true — any column name in fields that does not exist yet will be auto-created as a text column.',
     inputSchema: {
       type: 'object',
       properties: {
         table_uuid: { type: 'string', description: 'The UUID of the table' },
-        records: {
+        rows: {
           type: 'array',
           items: {
             type: 'object',
             properties: { fields: { type: 'object', additionalProperties: true } },
             required: ['fields']
           },
-          description: 'Array of row records (max 100)',
+          description: 'Array of rows to insert (max 100). Each row has a fields object keyed by column name.',
           maxItems: 100
         },
         options: {
           type: 'object',
           properties: {
-            allowNewColumns: { type: 'boolean', description: 'Auto-create columns (default: false)' },
-            typecast: { type: 'boolean', description: 'Attempt type coercion (default: true)' },
+            allow_new_columns: { type: 'boolean', description: 'Auto-create unknown column names as text columns (default: false). This is the only way to add columns to an existing table via the API.' },
             dedupe: {
               type: 'object',
               properties: {
@@ -314,7 +313,7 @@ const TOOLS: Tool[] = [
           }
         }
       },
-      required: ['table_uuid', 'records']
+      required: ['table_uuid', 'rows']
     }
   },
   {
@@ -718,13 +717,17 @@ export function createMcpServer(apiKey: string): Server {
         }
 
         case 'create_rows': {
-          const { table_uuid, records, options } = args as {
-            table_uuid: string; records: { fields: Record<string, any> }[]; options?: any;
+          const { table_uuid, rows: rowsInput, records: recordsLegacy, options } = args as {
+            table_uuid: string; rows?: { fields: Record<string, any> }[]; records?: { fields: Record<string, any> }[]; options?: any;
           };
-          const sizeErr = validateRowBatchSize(records, 'records');
+          const inputRows = rowsInput || recordsLegacy;
+          if (!inputRows) {
+            return { content: [{ type: 'text', text: 'rows is required — provide an array of { fields: { column_name: value } } objects.' }], isError: true };
+          }
+          const sizeErr = validateRowBatchSize(inputRows, 'rows');
           if (sizeErr) return { content: [{ type: 'text', text: sizeErr }], isError: true };
-          const response = await databarClient.createRows(table_uuid, { records, options });
-          auditLog({ timestamp: ts, tool: name, params: { table_uuid, count: records.length }, result: 'success' });
+          const response = await databarClient.createRows(table_uuid, { records: inputRows, options });
+          auditLog({ timestamp: ts, tool: name, params: { table_uuid, count: inputRows.length }, result: 'success' });
           return { content: [{ type: 'text', text: `Create rows result:\n\n${formatCreateRowsResponse(response)}` }] };
         }
 
@@ -734,9 +737,22 @@ export function createMcpServer(apiKey: string): Server {
           };
           const sizeErr = validateRowBatchSize(rows, 'rows');
           if (sizeErr) return { content: [{ type: 'text', text: sizeErr }], isError: true };
-          const response = await databarClient.patchRows(table_uuid, { rows, overwrite });
-          auditLog({ timestamp: ts, tool: name, params: { table_uuid, count: rows.length }, result: 'success' });
-          return { content: [{ type: 'text', text: `Patch rows result:\n\n${formatPatchRowsResponse(response)}` }] };
+          try {
+            const response = await databarClient.patchRows(table_uuid, { rows, overwrite });
+            auditLog({ timestamp: ts, tool: name, params: { table_uuid, count: rows.length }, result: 'success' });
+            return { content: [{ type: 'text', text: `Patch rows result:\n\n${formatPatchRowsResponse(response)}` }] };
+          } catch (patchErr: any) {
+            if (patchErr.message?.includes('UNKNOWN_COLUMNS') || patchErr.message?.includes('unknown') || patchErr.message?.includes('column')) {
+              try {
+                const cols = await databarClient.getTableColumns(table_uuid);
+                const colNames = cols.map(c => c.name).join(', ');
+                throw new Error(`${patchErr.message}\n\nValid columns on this table: ${colNames}\n\nNote: patch_rows cannot create new columns. Use create_rows with options.allow_new_columns=true first.`);
+              } catch (colErr: any) {
+                if (colErr.message.includes('Valid columns')) throw colErr;
+              }
+            }
+            throw patchErr;
+          }
         }
 
         case 'upsert_rows': {
@@ -745,9 +761,22 @@ export function createMcpServer(apiKey: string): Server {
           };
           const sizeErr = validateRowBatchSize(rows, 'rows');
           if (sizeErr) return { content: [{ type: 'text', text: sizeErr }], isError: true };
-          const response = await databarClient.upsertRows(table_uuid, { rows });
-          auditLog({ timestamp: ts, tool: name, params: { table_uuid, count: rows.length }, result: 'success' });
-          return { content: [{ type: 'text', text: `Upsert rows result:\n\n${formatUpsertRowsResponse(response)}` }] };
+          try {
+            const response = await databarClient.upsertRows(table_uuid, { rows });
+            auditLog({ timestamp: ts, tool: name, params: { table_uuid, count: rows.length }, result: 'success' });
+            return { content: [{ type: 'text', text: `Upsert rows result:\n\n${formatUpsertRowsResponse(response)}` }] };
+          } catch (upsertErr: any) {
+            if (upsertErr.message?.includes('UNKNOWN_COLUMNS') || upsertErr.message?.includes('unknown') || upsertErr.message?.includes('column')) {
+              try {
+                const cols = await databarClient.getTableColumns(table_uuid);
+                const colNames = cols.map(c => c.name).join(', ');
+                throw new Error(`${upsertErr.message}\n\nValid columns on this table: ${colNames}\n\nNote: upsert_rows cannot create new columns. Use create_rows with options.allow_new_columns=true first.`);
+              } catch (colErr: any) {
+                if (colErr.message.includes('Valid columns')) throw colErr;
+              }
+            }
+            throw upsertErr;
+          }
         }
 
         case 'get_table_enrichments': {
@@ -763,21 +792,67 @@ export function createMcpServer(apiKey: string): Server {
             table_uuid: string; enrichment_id: number; mapping: Record<string, any>;
           };
 
-          // Snapshot before, so we can detect the new table-enrichment ID
-          const beforeEnrichments = await databarClient.getTableEnrichments(table_uuid);
-          const beforeIds = new Set(beforeEnrichments.map(e => e.id));
+          // Auto-resolve column names → UUIDs for mapping-type entries
+          const resolvedMapping: Record<string, any> = {};
+          let columnMap: Record<string, string> | null = null;
+          const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-          const result = await databarClient.addTableEnrichment(table_uuid, { enrichment: enrichment_id, mapping });
+          for (const [param, entry] of Object.entries(mapping)) {
+            if (typeof entry !== 'object' || entry?.type !== 'mapping') {
+              resolvedMapping[param] = entry;
+              continue;
+            }
+            const value = String(entry.value || '');
+            if (uuidPattern.test(value)) {
+              resolvedMapping[param] = entry;
+              continue;
+            }
+            if (!columnMap) {
+              const cols = await databarClient.getTableColumns(table_uuid);
+              columnMap = {};
+              for (const c of cols) {
+                columnMap[c.name] = c.identifier;
+                columnMap[c.name.toLowerCase()] = c.identifier;
+              }
+            }
+            const uuid = columnMap[value] || columnMap[value.toLowerCase()];
+            if (uuid) {
+              resolvedMapping[param] = { ...entry, value: uuid };
+            } else {
+              const validNames = Object.keys(columnMap).filter(k => !uuidPattern.test(k)).join(', ');
+              return { content: [{ type: 'text', text: `Column "${value}" not found on this table.\n\nValid column names: ${validNames}\n\nUse one of these names in your mapping.` }], isError: true };
+            }
+          }
 
-          // Fetch the updated list and surface the new table-enrichment ID
-          const afterEnrichments = await databarClient.getTableEnrichments(table_uuid);
-          const newEnrichments = afterEnrichments.filter(e => !beforeIds.has(e.id));
-          const added = newEnrichments.length > 0 ? newEnrichments[0] : afterEnrichments[afterEnrichments.length - 1];
+          try {
+            // Snapshot before, so we can detect the new table-enrichment ID
+            const beforeEnrichments = await databarClient.getTableEnrichments(table_uuid);
+            const beforeIds = new Set(beforeEnrichments.map(e => e.id));
 
-          auditLog({ timestamp: ts, tool: name, params: { table_uuid, enrichment_id }, result: 'success' });
-          return { content: [{ type: 'text', text: safeResult(
-            `Enrichment added to table successfully.\n\nTable enrichment ID: ${added?.id ?? 'unknown'}\nName: ${added?.name ?? 'unknown'}\n\nUse this table enrichment ID (${added?.id ?? '<id>'}) with run_table_enrichment to trigger a run.`
-          )}] };
+            await databarClient.addTableEnrichment(table_uuid, { enrichment: enrichment_id, mapping: resolvedMapping });
+
+            // Fetch the updated list and surface the new table-enrichment ID
+            const afterEnrichments = await databarClient.getTableEnrichments(table_uuid);
+            const newEnrichments = afterEnrichments.filter(e => !beforeIds.has(e.id));
+            const added = newEnrichments.length > 0 ? newEnrichments[0] : afterEnrichments[afterEnrichments.length - 1];
+
+            auditLog({ timestamp: ts, tool: name, params: { table_uuid, enrichment_id }, result: 'success' });
+            return { content: [{ type: 'text', text: safeResult(
+              `Enrichment added to table successfully.\n\nTable enrichment ID: ${added?.id ?? 'unknown'}\nName: ${added?.name ?? 'unknown'}\n\nUse this table enrichment ID (${added?.id ?? '<id>'}) with run_table_enrichment to trigger a run.`
+            )}] };
+          } catch (addErr: any) {
+            const msg = addErr.message || 'Unknown error';
+            if (msg.includes('not found') || msg.includes('404')) {
+              throw new Error(`Failed to add enrichment ${enrichment_id} to table. This enrichment may not support table mode — not all enrichments can be attached to tables. Try a different enrichment ID.`);
+            }
+            if (msg.includes('400') || msg.includes('Validation') || msg.includes('Invalid')) {
+              const hint = columnMap
+                ? `\n\nAvailable columns: ${Object.keys(columnMap).filter(k => !uuidPattern.test(k)).join(', ')}`
+                : '';
+              throw new Error(`Failed to add enrichment ${enrichment_id} to table: ${msg}${hint}\n\nCheck that the enrichment ID is correct and all required parameters are mapped.`);
+            }
+            throw addErr;
+          }
         }
 
         case 'run_table_enrichment': {
@@ -786,7 +861,12 @@ export function createMcpServer(apiKey: string): Server {
           if (guard) return guard;
           const result = await databarClient.runTableEnrichment(table_uuid, enrichment_id);
           auditLog({ timestamp: ts, tool: name, params: { table_uuid, enrichment_id }, result: 'success' });
-          return { content: [{ type: 'text', text: `Table enrichment triggered successfully\n\n${formatResults(result)}` }] };
+          return { content: [{ type: 'text', text:
+            `Table enrichment triggered successfully.\n\n` +
+            `The enrichment is now running asynchronously on all applicable rows in the table. ` +
+            `Results will appear as new columns on each row once processing completes.\n\n` +
+            `To check progress, use get_table_rows to inspect the table — enrichment output columns will populate as rows are processed.`
+          }] };
         }
 
         case 'get_user_balance': {
