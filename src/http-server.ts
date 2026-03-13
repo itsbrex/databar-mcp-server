@@ -202,6 +202,29 @@ app.post('/message', async (req: express.Request, res: express.Response) => {
 });
 
 // ---------------------------------------------------------------------------
+// OAuth 2.1 Authorization Server Metadata (RFC 8414)
+// MCP clients discover this to initiate the OAuth flow automatically.
+// ---------------------------------------------------------------------------
+
+const OAUTH_ISSUER = process.env.OAUTH_ISSUER || 'https://databar.ai';
+
+app.get('/.well-known/oauth-authorization-server', (_req: express.Request, res: express.Response) => {
+  const issuer = OAUTH_ISSUER.replace(/\/+$/, '');
+  res.json({
+    issuer,
+    authorization_endpoint: `${issuer}/oauth/authorize/`,
+    token_endpoint: `${issuer}/oauth/token/`,
+    introspection_endpoint: `${issuer}/oauth/introspect/`,
+    revocation_endpoint: `${issuer}/oauth/revoke_token/`,
+    scopes_supported: ['enrichments:run', 'tables:read', 'tables:write', 'balance:read'],
+    response_types_supported: ['code'],
+    code_challenge_methods_supported: ['S256'],
+    grant_types_supported: ['authorization_code'],
+    token_endpoint_auth_methods_supported: ['none'],
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Health check
 // ---------------------------------------------------------------------------
 

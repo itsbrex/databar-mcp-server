@@ -38,6 +38,11 @@ export interface EnrichmentResponseField {
   type_field: string;
 }
 
+export interface PaginationInfo {
+  supported: boolean;
+  per_page?: number | null;
+}
+
 export interface Enrichment {
   id: number;
   name: string;
@@ -47,14 +52,21 @@ export interface Enrichment {
   auth_method: string;
   params?: EnrichmentParam[];
   response_fields?: EnrichmentResponseField[];
+  pagination?: PaginationInfo;
+}
+
+export interface PaginationOptions {
+  pages: number;
 }
 
 export interface EnrichmentRunRequest {
   params: Record<string, any>;
+  pagination?: PaginationOptions;
 }
 
 export interface BulkEnrichmentRunRequest {
   params: Record<string, any>[];
+  pagination?: PaginationOptions;
 }
 
 export interface EnrichmentRunResponse {
