@@ -80,7 +80,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'run_enrichment',
-    description: 'Execute a data enrichment with the provided parameters. Automatically handles async execution and polling, returning final results. Results are cached for 24 hours to reduce costs. Subject to spending limits (DATABAR_MAX_COST_PER_REQUEST, DATABAR_MIN_BALANCE).',
+    description: 'Execute a data enrichment with the provided parameters. Automatically handles async execution and polling, returning final results. Results are cached for 24 hours to reduce costs. Subject to spending limits (DATABAR_MAX_COST_PER_REQUEST, DATABAR_MIN_BALANCE). For paginated enrichments, use the pages parameter to fetch multiple pages (each page is billed separately).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -97,6 +97,13 @@ const TOOLS: Tool[] = [
           type: 'boolean',
           description: 'Skip cache and fetch fresh data (default: false)',
           default: false
+        },
+        pages: {
+          type: 'number',
+          description: 'Number of pages to fetch for paginated enrichments (default: 1, max: 100). Each page is billed separately. Use get_enrichment_details to check if pagination is supported.',
+          default: 1,
+          minimum: 1,
+          maximum: 100
         }
       },
       required: ['enrichment_id', 'params']
@@ -104,7 +111,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'run_bulk_enrichment',
-    description: 'Execute an enrichment on multiple inputs at once. Provide an array of parameter objects. Subject to spending limits.',
+    description: 'Execute an enrichment on multiple inputs at once. Provide an array of parameter objects. Subject to spending limits. For paginated enrichments, use the pages parameter to fetch multiple pages per record (each page per record is billed separately).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -116,6 +123,13 @@ const TOOLS: Tool[] = [
           type: 'array',
           items: { type: 'object', additionalProperties: true },
           description: 'Array of parameter objects, one per record'
+        },
+        pages: {
+          type: 'number',
+          description: 'Number of pages to fetch per record for paginated enrichments (default: 1, max: 100). Each page per record is billed separately.',
+          default: 1,
+          minimum: 1,
+          maximum: 100
         }
       },
       required: ['enrichment_id', 'params_list']
@@ -518,7 +532,7 @@ export function createMcpServer(apiKey: string): Server {
           auditLog({ timestamp: ts, tool: name, params: { enrichment_id }, result: 'success' });
           const enrichment = await databarClient.getEnrichmentDetails(enrichment_id);
           const categorized = categorizeEnrichment(enrichment);
-          const details = {
+          const details: Record<string, any> = {
             id: categorized.id, name: categorized.name, category: categorized.category,
             description: categorized.description, data_source: categorized.data_source,
             price: categorized.price, auth_method: categorized.auth_method,
@@ -536,18 +550,22 @@ export function createMcpServer(apiKey: string): Server {
               }
               return param;
             }),
-            response_fields: categorized.response_fields?.map(f => ({ name: f.name, type: f.type_field }))
+            response_fields: categorized.response_fields?.map(f => ({ name: f.name, type: f.type_field })),
+            pagination: enrichment.pagination ?? { supported: false }
           };
+          const paginationNote = enrichment.pagination?.supported
+            ? `\n\nPagination: supported (${enrichment.pagination.per_page} results per page). Use the "pages" parameter in run_enrichment to fetch multiple pages.`
+            : '';
           return {
             content: [{ type: 'text', text: safeResult(
-              `Enrichment Details:\n\n${formatEnrichmentForDisplay(categorized)}\n\nFull Details:\n${JSON.stringify(details, null, 2)}`
+              `Enrichment Details:\n\n${formatEnrichmentForDisplay(categorized)}${paginationNote}\n\nFull Details:\n${JSON.stringify(details, null, 2)}`
             )}]
           };
         }
 
         case 'run_enrichment': {
-          const { enrichment_id, params, skip_cache = false } = args as {
-            enrichment_id: number; params: Record<string, any>; skip_cache?: boolean;
+          const { enrichment_id, params, skip_cache = false, pages = 1 } = args as {
+            enrichment_id: number; params: Record<string, any>; skip_cache?: boolean; pages?: number;
           };
           const enrichment = await databarClient.getEnrichmentDetails(enrichment_id);
           const validation = validateParams(enrichment, params);
@@ -555,7 +573,8 @@ export function createMcpServer(apiKey: string): Server {
             auditLog({ timestamp: ts, tool: name, params: { enrichment_id }, result: 'error', message: 'validation failed' });
             return { content: [{ type: 'text', text: `Parameter validation failed:\n${validation.errors.join('\n')}` }], isError: true };
           }
-          if (!skip_cache) {
+          const paginationOpt = pages > 1 ? { pages } : undefined;
+          if (!skip_cache && !paginationOpt) {
             const cachedData = cache.get(enrichment_id, params);
             if (cachedData) {
               auditLog({ timestamp: ts, tool: name, params: { enrichment_id }, estimatedCost: 0, result: 'cached' });
@@ -564,20 +583,24 @@ export function createMcpServer(apiKey: string): Server {
               )}] };
             }
           }
-          const guard = await guardSpending(name, enrichment.price, { enrichment_id });
+          const estimatedCost = enrichment.price * (paginationOpt?.pages ?? 1);
+          const guard = await guardSpending(name, estimatedCost, { enrichment_id });
           if (guard) return guard;
-          const data = await databarClient.runEnrichmentSync(enrichment_id, params);
-          cache.set(enrichment_id, params, data);
-          auditLog({ timestamp: ts, tool: name, params: { enrichment_id }, estimatedCost: enrichment.price, result: 'success' });
-          const warn = unsafeModeWarning(spendingConfig, enrichment.price);
+          const data = await databarClient.runEnrichmentSync(enrichment_id, params, paginationOpt);
+          if (!paginationOpt) {
+            cache.set(enrichment_id, params, data);
+          }
+          auditLog({ timestamp: ts, tool: name, params: { enrichment_id, pages }, estimatedCost, result: 'success' });
+          const warn = unsafeModeWarning(spendingConfig, estimatedCost);
+          const pagesNote = paginationOpt ? `\nPages requested: ${paginationOpt.pages}` : '';
           return { content: [{ type: 'text', text: safeResult(
-            `${warn}Enrichment completed successfully\n\nEnrichment: ${enrichment.name}\nCost: ${enrichment.price} credits\n\nResults:\n${formatResults(data)}`
+            `${warn}Enrichment completed successfully\n\nEnrichment: ${enrichment.name}\nCost: ~${estimatedCost.toFixed(2)} credits${pagesNote}\n\nResults:\n${formatResults(data)}`
           )}] };
         }
 
         case 'run_bulk_enrichment': {
-          const { enrichment_id, params_list } = args as {
-            enrichment_id: number; params_list: Record<string, any>[];
+          const { enrichment_id, params_list, pages = 1 } = args as {
+            enrichment_id: number; params_list: Record<string, any>[]; pages?: number;
           };
           const sizeErr = validateBulkArray(params_list, 'params_list');
           if (sizeErr) {
@@ -585,14 +608,16 @@ export function createMcpServer(apiKey: string): Server {
             return { content: [{ type: 'text', text: sizeErr }], isError: true };
           }
           const enrichment = await databarClient.getEnrichmentDetails(enrichment_id);
-          const estimatedCost = enrichment.price * params_list.length;
+          const paginationOpt = pages > 1 ? { pages } : undefined;
+          const estimatedCost = enrichment.price * params_list.length * (paginationOpt?.pages ?? 1);
           const guard = await guardSpending(name, estimatedCost, { enrichment_id, count: params_list.length });
           if (guard) return guard;
-          const data = await databarClient.runBulkEnrichmentSync(enrichment_id, params_list);
-          auditLog({ timestamp: ts, tool: name, params: { enrichment_id, count: params_list.length }, estimatedCost, result: 'success' });
+          const data = await databarClient.runBulkEnrichmentSync(enrichment_id, params_list, paginationOpt);
+          auditLog({ timestamp: ts, tool: name, params: { enrichment_id, count: params_list.length, pages }, estimatedCost, result: 'success' });
           const warn = unsafeModeWarning(spendingConfig, estimatedCost, params_list.length);
+          const pagesNote = paginationOpt ? ` x ${paginationOpt.pages} pages` : '';
           return { content: [{ type: 'text', text: safeResult(
-            `${warn}Bulk enrichment completed\n\nEnrichment: ${enrichment.name}\nRecords: ${params_list.length}\nEstimated cost: ~${estimatedCost.toFixed(2)} credits\n\nResults:\n${formatResults(data)}`
+            `${warn}Bulk enrichment completed\n\nEnrichment: ${enrichment.name}\nRecords: ${params_list.length}${pagesNote}\nEstimated cost: ~${estimatedCost.toFixed(2)} credits\n\nResults:\n${formatResults(data)}`
           )}] };
         }
 

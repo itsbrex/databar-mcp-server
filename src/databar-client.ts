@@ -27,7 +27,8 @@ import {
   BulkWaterfallRunRequest,
   WaterfallTaskResponse,
   User,
-  DatabarError
+  DatabarError,
+  PaginationOptions
 } from './types.js';
 
 const API_ROW_BATCH = 50;
@@ -50,6 +51,7 @@ export class DatabarClient {
       baseURL: config.baseUrl,
       headers: {
         'x-apikey': config.apiKey,
+        'Authorization': `Bearer ${config.apiKey}`,
         'Content-Type': 'application/json'
       },
       timeout: 30000
@@ -138,10 +140,14 @@ export class DatabarClient {
 
   async getAllEnrichments(): Promise<Enrichment[]> {
     try {
-      const response = await this.withRetry(() => 
-        this.client.get<Enrichment[]>('/enrichments')
+      const response = await this.withRetry(() =>
+        this.client.get<Enrichment[] | { items?: Enrichment[]; results?: Enrichment[] }>('/enrichments')
       );
-      return response.data;
+      const data = response.data;
+      if (Array.isArray(data)) return data;
+      if (data?.items) return data.items;
+      if (data?.results) return data.results;
+      return [];
     } catch (error) {
       this.handleError(error);
     }
@@ -160,10 +166,14 @@ export class DatabarClient {
 
   async runEnrichment(
     enrichmentId: number,
-    params: Record<string, any>
+    params: Record<string, any>,
+    pagination?: PaginationOptions
   ): Promise<EnrichmentRunResponse> {
     try {
       const payload: EnrichmentRunRequest = { params };
+      if (pagination && pagination.pages > 1) {
+        payload.pagination = pagination;
+      }
       const response = await this.withRetry(() =>
         this.client.post<EnrichmentRunResponse>(
           `/enrichments/${enrichmentId}/run`,
@@ -178,10 +188,14 @@ export class DatabarClient {
 
   async runBulkEnrichment(
     enrichmentId: number,
-    paramsList: Record<string, any>[]
+    paramsList: Record<string, any>[],
+    pagination?: PaginationOptions
   ): Promise<EnrichmentRunResponse> {
     try {
       const payload: BulkEnrichmentRunRequest = { params: paramsList };
+      if (pagination && pagination.pages > 1) {
+        payload.pagination = pagination;
+      }
       const response = await this.withRetry(() =>
         this.client.post<EnrichmentRunResponse>(
           `/enrichments/${enrichmentId}/bulk-run`,
@@ -236,17 +250,19 @@ export class DatabarClient {
 
   async runEnrichmentSync(
     enrichmentId: number,
-    params: Record<string, any>
+    params: Record<string, any>,
+    pagination?: PaginationOptions
   ): Promise<any> {
-    const runResponse = await this.runEnrichment(enrichmentId, params);
+    const runResponse = await this.runEnrichment(enrichmentId, params, pagination);
     return await this.pollTaskUntilComplete(runResponse.task_id);
   }
 
   async runBulkEnrichmentSync(
     enrichmentId: number,
-    paramsList: Record<string, any>[]
+    paramsList: Record<string, any>[],
+    pagination?: PaginationOptions
   ): Promise<any> {
-    const runResponse = await this.runBulkEnrichment(enrichmentId, paramsList);
+    const runResponse = await this.runBulkEnrichment(enrichmentId, paramsList, pagination);
     return await this.pollTaskUntilComplete(runResponse.task_id);
   }
 
