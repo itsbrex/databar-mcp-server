@@ -37,7 +37,10 @@ function extractApiKey(req: express.Request): string | null {
   return auth.slice(7) || null;
 }
 
-function rejectUnauthorized(res: express.Response): void {
+function rejectUnauthorized(req: express.Request, res: express.Response): void {
+  const host = req.headers.host || 'mcp.databar.ai';
+  const resourceMetadataUrl = `https://${host}/.well-known/oauth-protected-resource`;
+  res.setHeader('WWW-Authenticate', `Bearer resource_metadata="${resourceMetadataUrl}"`);
   res.status(401).json({
     jsonrpc: '2.0',
     error: { code: -32001, message: 'Unauthorized: provide a Databar API key as Bearer token' },
@@ -58,7 +61,7 @@ const sessions: Map<string, SessionEntry> = new Map();
 
 app.post('/mcp', async (req: express.Request, res: express.Response) => {
   const apiKey = extractApiKey(req);
-  if (!apiKey) return rejectUnauthorized(res);
+  if (!apiKey) return rejectUnauthorized(req, res);
 
   try {
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
@@ -154,7 +157,7 @@ const sseSessions: Map<string, SseSessionEntry> = new Map();
 
 app.get('/sse', async (req: express.Request, res: express.Response) => {
   const apiKey = extractApiKey(req);
-  if (!apiKey) return rejectUnauthorized(res);
+  if (!apiKey) return rejectUnauthorized(req, res);
 
   try {
     const transport = new SSEServerTransport('/message', res);
@@ -207,6 +210,17 @@ app.post('/message', async (req: express.Request, res: express.Response) => {
 // ---------------------------------------------------------------------------
 
 const OAUTH_ISSUER = process.env.OAUTH_ISSUER || 'https://databar.ai';
+
+app.get('/.well-known/oauth-protected-resource', (req: express.Request, res: express.Response) => {
+  const host = req.headers.host || 'mcp.databar.ai';
+  const issuer = OAUTH_ISSUER.replace(/\/+$/, '');
+  res.json({
+    resource: `https://${host}`,
+    authorization_servers: [issuer],
+    scopes_supported: ['enrichments:run', 'tables:read', 'tables:write', 'balance:read'],
+    bearer_methods_supported: ['header'],
+  });
+});
 
 app.get('/.well-known/oauth-authorization-server', (_req: express.Request, res: express.Response) => {
   const issuer = OAUTH_ISSUER.replace(/\/+$/, '');
