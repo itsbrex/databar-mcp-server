@@ -228,6 +228,7 @@ app.get('/.well-known/oauth-authorization-server', (_req: express.Request, res: 
     issuer,
     authorization_endpoint: `${issuer}/oauth/authorize/`,
     token_endpoint: `${issuer}/oauth/token/`,
+    registration_endpoint: `${issuer}/oauth/register/`,
     introspection_endpoint: `${issuer}/oauth/introspect/`,
     revocation_endpoint: `${issuer}/oauth/revoke_token/`,
     scopes_supported: ['enrichments:run', 'tables:read', 'tables:write', 'balance:read'],
