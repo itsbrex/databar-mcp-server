@@ -277,7 +277,7 @@ const TOOLS: Tool[] = [
       properties: {
         table_uuid: { type: 'string', description: 'The UUID of the table' },
         page: { type: 'number', description: 'Page number (default: 1)', default: 1 },
-        per_page: { type: 'number', description: 'Rows per page (default: 100, max: 500)', default: 100 },
+        per_page: { type: 'number', description: 'Rows per page (default: 100, max: 500)', default: 100, maximum: 500 },
         filter: {
           type: 'object',
           description: 'Filter rows by column values (AND logic). Keys are column names, values are objects with one operator. Operators: equals, contains (case-insensitive), not_equals, is_empty (true), is_not_empty (true). Examples: {"company":{"contains":"tech"}}, {"status":{"equals":"active"}}, {"email":{"is_not_empty":true}}, {"name":{"contains":"a"},"revenue":{"equals":"5000"}}',
@@ -736,7 +736,8 @@ export function createMcpServer(apiKey: string): Server {
           const { table_uuid, page = 1, per_page = 100, filter } = args as {
             table_uuid: string; page?: number; per_page?: number; filter?: Record<string, any>;
           };
-          const data = await databarClient.getTableRows(table_uuid, page, per_page, filter);
+          const clampedPerPage = Math.min(per_page, 500);
+          const data = await databarClient.getTableRows(table_uuid, page, clampedPerPage, filter);
           auditLog({ timestamp: ts, tool: name, params: { table_uuid, page, per_page, filter }, result: 'success' });
           return { content: [{ type: 'text', text: safeResult(`Table rows (page ${page}):\n\n${formatResults(data)}`) }] };
         }
