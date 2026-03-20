@@ -107,6 +107,7 @@ export interface Table {
 export interface Column {
   identifier: string;
   internal_name: string;
+  additional_intenal_name: string | null;
   name: string;
   type_of_value: string;
   data_processor_id: number | null;

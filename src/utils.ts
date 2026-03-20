@@ -244,7 +244,8 @@ export function formatTableForDisplay(table: Table): string {
  * Format column for display
  */
 export function formatColumnForDisplay(column: Column): string {
-  return `${column.name} (${column.type_of_value}) [${column.identifier}]`;
+  const filterName = column.additional_intenal_name ? ` | filter_name: ${column.additional_intenal_name}` : '';
+  return `${column.name} (${column.type_of_value}) [${column.identifier}]${filterName}`;
 }
 
 /**
