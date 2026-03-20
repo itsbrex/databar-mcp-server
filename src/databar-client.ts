@@ -69,7 +69,15 @@ export class DatabarClient {
       const data = axiosError.response?.data;
 
       if (status === 401 || status === 403) {
-        throw new Error('Invalid API key or insufficient credits. Please check your API key and account balance.');
+        const detail = typeof data?.detail === 'string' ? data.detail : '';
+        const isSDK = /sdk is not available/i.test(detail) || /not available on your current plan/i.test(detail);
+        if (isSDK) {
+          throw new Error(
+            'The Databar API and MCP are not available on your current plan. ' +
+            'Please view databar.ai/pricing to pick out a plan with access.'
+          );
+        }
+        throw new Error('Invalid API key or insufficient permissions. Please check your API key and account balance.');
       }
 
       if (status === 422) {
