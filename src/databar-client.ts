@@ -26,6 +26,9 @@ import {
   WaterfallRunRequest,
   BulkWaterfallRunRequest,
   WaterfallTaskResponse,
+  AddWaterfallRequest,
+  AddWaterfallResponse,
+  InstalledWaterfall,
   User,
   DatabarError,
   PaginationOptions
@@ -487,6 +490,31 @@ export class DatabarClient {
     try {
       const response = await this.withRetry(() =>
         this.client.post(`/table/${tableUuid}/run-enrichment/${enrichmentId}`)
+      );
+      return response.data;
+    } catch (error) {
+      this.handleError(error);
+    }
+  }
+
+  async addTableWaterfall(
+    tableUuid: string,
+    data: AddWaterfallRequest
+  ): Promise<AddWaterfallResponse> {
+    try {
+      const response = await this.withRetry(() =>
+        this.client.post<AddWaterfallResponse>(`/table/${tableUuid}/add-waterfall`, data)
+      );
+      return response.data;
+    } catch (error) {
+      this.handleError(error);
+    }
+  }
+
+  async getTableWaterfalls(tableUuid: string): Promise<InstalledWaterfall[]> {
+    try {
+      const response = await this.withRetry(() =>
+        this.client.get<InstalledWaterfall[]>(`/table/${tableUuid}/waterfalls`)
       );
       return response.data;
     } catch (error) {

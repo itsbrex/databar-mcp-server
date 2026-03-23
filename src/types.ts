@@ -131,6 +131,23 @@ export interface AddEnrichmentRequest {
   mapping: Record<string, { value: string; type: string }>;
 }
 
+export interface AddWaterfallRequest {
+  waterfall: string;
+  enrichments: number[];
+  mapping: Record<string, string>;
+  email_verifier?: number | null;
+}
+
+export interface AddWaterfallResponse {
+  id: number;
+  waterfall_name: string;
+}
+
+export interface InstalledWaterfall {
+  id: number;
+  waterfall_name: string;
+}
+
 // ============================================================================
 // Row Types
 // ============================================================================

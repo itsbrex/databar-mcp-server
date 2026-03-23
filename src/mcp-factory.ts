@@ -425,14 +425,59 @@ WORKFLOW:
   },
   {
     name: 'run_table_enrichment',
-    description: 'Trigger an enrichment to run on all rows in a table. Subject to spending limits.',
+    description: 'Trigger an enrichment or waterfall to run on all rows in a table. Works for both enrichments (from add_table_enrichment) and waterfalls (from add_table_waterfall). Subject to spending limits.',
     inputSchema: {
       type: 'object',
       properties: {
         table_uuid: { type: 'string', description: 'The UUID of the table' },
-        enrichment_id: { type: 'string', description: 'The table enrichment ID to run' }
+        enrichment_id: { type: 'string', description: 'The table enrichment/waterfall ID to run (returned by add_table_enrichment or add_table_waterfall)' }
       },
       required: ['table_uuid', 'enrichment_id']
+    }
+  },
+  {
+    name: 'add_table_waterfall',
+    description: `Add a waterfall to a table. A waterfall tries multiple data providers in sequence until one returns a result.
+
+WORKFLOW:
+1. Call search_waterfalls to find the right waterfall (e.g. "email_getter", "person_getter").
+2. Note the waterfall identifier, available_enrichments (provider IDs), and input_params.
+3. Call get_table_columns to see available column names.
+4. Build the mapping: keys are waterfall param names, values are column names.
+5. The returned id is the TABLE-WATERFALL id — use it with run_table_enrichment to trigger a run.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        table_uuid: { type: 'string', description: 'The UUID of the table' },
+        waterfall_identifier: { type: 'string', description: 'The waterfall identifier (e.g. "email_getter"). Get from search_waterfalls.' },
+        enrichments: {
+          type: 'array',
+          items: { type: 'number' },
+          description: 'List of enrichment (provider) IDs to use in the waterfall cascade. Get from search_waterfalls available_enrichments.',
+          minItems: 1
+        },
+        mapping: {
+          type: 'object',
+          description: 'Maps waterfall param names to table column names. Keys = param names from waterfall input_params. Values = column names from get_table_columns.',
+          additionalProperties: { type: 'string' }
+        },
+        email_verifier: {
+          type: 'number',
+          description: 'Optional enrichment ID for email verification (only for email waterfalls with is_email_verifying=true).'
+        }
+      },
+      required: ['table_uuid', 'waterfall_identifier', 'enrichments', 'mapping']
+    }
+  },
+  {
+    name: 'get_table_waterfalls',
+    description: 'List all waterfalls installed on a table. Returns waterfall IDs that can be used with run_table_enrichment.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        table_uuid: { type: 'string', description: 'The UUID of the table' }
+      },
+      required: ['table_uuid']
     }
   },
   {
@@ -886,11 +931,92 @@ export function createMcpServer(apiKey: string): Server {
           const result = await databarClient.runTableEnrichment(table_uuid, enrichment_id);
           auditLog({ timestamp: ts, tool: name, params: { table_uuid, enrichment_id }, result: 'success' });
           return { content: [{ type: 'text', text:
-            `Table enrichment triggered successfully.\n\n` +
-            `The enrichment is now running asynchronously on all applicable rows in the table. ` +
+            `Table enrichment/waterfall triggered successfully.\n\n` +
+            `It is now running asynchronously on all applicable rows in the table. ` +
             `Results will appear as new columns on each row once processing completes.\n\n` +
-            `To check progress, use get_table_rows to inspect the table — enrichment output columns will populate as rows are processed.`
+            `To check progress, use get_table_rows to inspect the table — output columns will populate as rows are processed.`
           }] };
+        }
+
+        case 'add_table_waterfall': {
+          const { table_uuid, waterfall_identifier, enrichments, mapping, email_verifier } = args as {
+            table_uuid: string;
+            waterfall_identifier: string;
+            enrichments: number[];
+            mapping: Record<string, string>;
+            email_verifier?: number;
+          };
+
+          const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+          const resolvedMapping: Record<string, string> = {};
+          let columnMap: Record<string, string> | null = null;
+
+          for (const [param, colRef] of Object.entries(mapping)) {
+            if (uuidPattern.test(colRef)) {
+              resolvedMapping[param] = colRef;
+              continue;
+            }
+            if (!columnMap) {
+              const cols = await databarClient.getTableColumns(table_uuid);
+              columnMap = {};
+              for (const c of cols) {
+                columnMap[c.name] = c.identifier;
+                columnMap[c.name.toLowerCase()] = c.identifier;
+                if (c.additional_intenal_name) {
+                  columnMap[c.additional_intenal_name] = c.identifier;
+                  columnMap[c.additional_intenal_name.toLowerCase()] = c.identifier;
+                }
+              }
+            }
+            const uuid = columnMap[colRef] || columnMap[colRef.toLowerCase()];
+            if (uuid) {
+              resolvedMapping[param] = uuid;
+            } else {
+              const validNames = Object.keys(columnMap).filter(k => !uuidPattern.test(k)).join(', ');
+              return { content: [{ type: 'text', text: `Column "${colRef}" not found on this table.\n\nValid column names: ${validNames}\n\nUse one of these names in your mapping.` }], isError: true };
+            }
+          }
+
+          try {
+            const payload: any = {
+              waterfall: waterfall_identifier,
+              enrichments,
+              mapping: resolvedMapping,
+            };
+            if (email_verifier != null) {
+              payload.email_verifier = email_verifier;
+            }
+
+            const result = await databarClient.addTableWaterfall(table_uuid, payload);
+            auditLog({ timestamp: ts, tool: name, params: { table_uuid, waterfall_identifier, enrichments }, result: 'success' });
+            return { content: [{ type: 'text', text:
+              `Waterfall added to table successfully.\n\n` +
+              `Table waterfall ID: ${result.id}\n` +
+              `Name: ${result.waterfall_name}\n\n` +
+              `Use this ID (${result.id}) with run_table_enrichment to trigger a run on all rows.`
+            }] };
+          } catch (addErr: any) {
+            const msg = addErr.message || 'Unknown error';
+            if (msg.includes('not found') || msg.includes('404')) {
+              throw new Error(`Failed to add waterfall "${waterfall_identifier}" to table. Check the waterfall identifier is correct (use search_waterfalls to find valid identifiers).`);
+            }
+            if (msg.includes('400') || msg.includes('Validation') || msg.includes('Invalid')) {
+              const hint = columnMap
+                ? `\n\nAvailable columns: ${Object.keys(columnMap).filter(k => !uuidPattern.test(k)).join(', ')}`
+                : '';
+              throw new Error(`Failed to add waterfall "${waterfall_identifier}" to table: ${msg}${hint}\n\nCheck that all required parameters are mapped to valid columns and enrichment IDs are from the waterfall's available_enrichments.`);
+            }
+            throw addErr;
+          }
+        }
+
+        case 'get_table_waterfalls': {
+          const { table_uuid } = args as { table_uuid: string };
+          const waterfalls = await databarClient.getTableWaterfalls(table_uuid);
+          auditLog({ timestamp: ts, tool: name, params: { table_uuid }, result: 'success' });
+          if (waterfalls.length === 0) return { content: [{ type: 'text', text: 'No waterfalls installed on this table.' }] };
+          const lines = waterfalls.map(w => `ID: ${w.id} — ${w.waterfall_name}`).join('\n');
+          return { content: [{ type: 'text', text: `Table has ${waterfalls.length} waterfall(s):\n\n${lines}\n\nUse the ID with run_table_enrichment to trigger a run.` }] };
         }
 
         case 'get_user_balance': {
