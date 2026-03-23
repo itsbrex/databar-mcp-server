@@ -43,6 +43,11 @@ export interface PaginationInfo {
   per_page?: number | null;
 }
 
+export interface EnrichmentCategoryInfo {
+  id: number;
+  name: string;
+}
+
 export interface Enrichment {
   id: number;
   name: string;
@@ -50,6 +55,9 @@ export interface Enrichment {
   data_source: string;
   price: number;
   auth_method: string;
+  rank?: number;
+  search_keywords?: string;
+  category?: EnrichmentCategoryInfo[];
   params?: EnrichmentParam[];
   response_fields?: EnrichmentResponseField[];
   pagination?: PaginationInfo;
@@ -333,22 +341,3 @@ export interface DatabarConfig {
   pollIntervalMs: number;
 }
 
-// ============================================================================
-// Enrichment Categories (for smart selection)
-// ============================================================================
-
-export enum EnrichmentCategory {
-  PEOPLE = 'people',
-  COMPANY = 'company',
-  EMAIL = 'email',
-  PHONE = 'phone',
-  SOCIAL = 'social',
-  FINANCIAL = 'financial',
-  VERIFICATION = 'verification',
-  OTHER = 'other'
-}
-
-export interface CategorizedEnrichment extends Enrichment {
-  category: EnrichmentCategory;
-  searchKeywords: string[];
-}

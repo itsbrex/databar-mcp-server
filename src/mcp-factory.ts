@@ -12,7 +12,6 @@ import {
 import { DatabarClient } from './databar-client.js';
 import { Cache } from './cache.js';
 import {
-  categorizeEnrichment,
   searchEnrichments,
   filterByCategory,
   formatEnrichmentForDisplay,
@@ -37,23 +36,22 @@ import {
   SpendingConfig
 } from './guards.js';
 import { auditLog } from './audit.js';
-import { DatabarConfig, CategorizedEnrichment, EnrichmentCategory } from './types.js';
+import { DatabarConfig, Enrichment } from './types.js';
 
 const TOOLS: Tool[] = [
   {
     name: 'search_enrichments',
-    description: 'Search and discover available data enrichments. Use this to find the right enrichment for a specific task (e.g., "linkedin profile", "email finder", "company data"). Returns a list of matching enrichments with their IDs, descriptions, required parameters, and pricing.',
+    description: 'Search and discover available data enrichments. Use this to find the right enrichment for a specific task (e.g., "linkedin profile", "email finder", "company data"). Returns a list of matching enrichments with their IDs, descriptions, required parameters, and pricing. Results are sorted by recommendation rank (best options first). BYOK providers that the user has not connected are automatically excluded.',
     inputSchema: {
       type: 'object',
       properties: {
         query: {
           type: 'string',
-          description: 'Search query to find enrichments (e.g., "linkedin", "email verification", "company data")'
+          description: 'Search query to find enrichments (e.g., "linkedin", "email verification", "company data", "job postings", "tech stack")'
         },
         category: {
           type: 'string',
-          enum: ['people', 'company', 'email', 'phone', 'social', 'financial', 'verification', 'other'],
-          description: 'Optional: Filter by category'
+          description: 'Optional: Filter by category name (e.g., "Company Data", "Contact Finding", "Hiring Signals", "Tech Stack", "SEO", "Reviews")'
         },
         limit: {
           type: 'number',
@@ -461,17 +459,16 @@ export function createMcpServer(apiKey: string): Server {
   const databarClient = new DatabarClient(config);
   const cache = new Cache(config.cacheTtlHours);
 
-  let enrichmentsCache: CategorizedEnrichment[] | null = null;
+  let enrichmentsCache: Enrichment[] | null = null;
   let enrichmentsCacheTime: number = 0;
   const ENRICHMENTS_CACHE_TTL = 5 * 60 * 1000;
 
-  async function getCachedEnrichments(): Promise<CategorizedEnrichment[]> {
+  async function getCachedEnrichments(): Promise<Enrichment[]> {
     const now = Date.now();
     if (enrichmentsCache && (now - enrichmentsCacheTime) < ENRICHMENTS_CACHE_TTL) {
       return enrichmentsCache;
     }
-    const enrichments = await databarClient.getAllEnrichments();
-    enrichmentsCache = enrichments.map(categorizeEnrichment);
+    enrichmentsCache = await databarClient.getAllEnrichments();
     enrichmentsCacheTime = now;
     return enrichmentsCache;
   }
@@ -511,7 +508,7 @@ export function createMcpServer(apiKey: string): Server {
 
         case 'search_enrichments': {
           const { query, category, limit = 10 } = args as {
-            query: string; category?: EnrichmentCategory; limit?: number;
+            query: string; category?: string; limit?: number;
           };
           auditLog({ timestamp: ts, tool: name, params: { query, category, limit }, result: 'success' });
           let enrichments = await getCachedEnrichments();
@@ -531,12 +528,13 @@ export function createMcpServer(apiKey: string): Server {
           const { enrichment_id } = args as { enrichment_id: number };
           auditLog({ timestamp: ts, tool: name, params: { enrichment_id }, result: 'success' });
           const enrichment = await databarClient.getEnrichmentDetails(enrichment_id);
-          const categorized = categorizeEnrichment(enrichment);
+          const categoryNames = enrichment.category?.map(c => c.name).join(', ') || 'Uncategorized';
           const details: Record<string, any> = {
-            id: categorized.id, name: categorized.name, category: categorized.category,
-            description: categorized.description, data_source: categorized.data_source,
-            price: categorized.price, auth_method: categorized.auth_method,
-            parameters: categorized.params?.map(p => {
+            id: enrichment.id, name: enrichment.name, category: categoryNames,
+            description: enrichment.description, data_source: enrichment.data_source,
+            price: enrichment.price, auth_method: enrichment.auth_method,
+            rank: enrichment.rank || 0,
+            parameters: enrichment.params?.map(p => {
               const param: Record<string, any> = {
                 name: p.name, required: p.is_required, type: p.type_field, description: p.description,
               };
@@ -550,7 +548,7 @@ export function createMcpServer(apiKey: string): Server {
               }
               return param;
             }),
-            response_fields: categorized.response_fields?.map(f => ({ name: f.name, type: f.type_field })),
+            response_fields: enrichment.response_fields?.map(f => ({ name: f.name, type: f.type_field })),
             pagination: enrichment.pagination ?? { supported: false }
           };
           const paginationNote = enrichment.pagination?.supported
@@ -558,7 +556,7 @@ export function createMcpServer(apiKey: string): Server {
             : '';
           return {
             content: [{ type: 'text', text: safeResult(
-              `Enrichment Details:\n\n${formatEnrichmentForDisplay(categorized)}${paginationNote}\n\nFull Details:\n${JSON.stringify(details, null, 2)}`
+              `Enrichment Details:\n\n${formatEnrichmentForDisplay(enrichment)}${paginationNote}\n\nFull Details:\n${JSON.stringify(details, null, 2)}`
             )}]
           };
         }

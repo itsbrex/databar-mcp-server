@@ -4,8 +4,6 @@
 
 import {
   Enrichment,
-  EnrichmentCategory,
-  CategorizedEnrichment,
   Table,
   Column,
   TableEnrichment,
@@ -15,131 +13,55 @@ import {
 } from './types.js';
 
 /**
- * Categorize an enrichment based on its name and description
- */
-export function categorizeEnrichment(enrichment: Enrichment): CategorizedEnrichment {
-  const text = `${enrichment.name} ${enrichment.description}`.toLowerCase();
-  
-  let category = EnrichmentCategory.OTHER;
-  const searchKeywords: string[] = [];
-
-  if (
-    text.includes('linkedin') ||
-    text.includes('person') ||
-    text.includes('people') ||
-    text.includes('profile') ||
-    text.includes('contact') ||
-    text.includes('name')
-  ) {
-    category = EnrichmentCategory.PEOPLE;
-    searchKeywords.push('linkedin', 'profile', 'person', 'people', 'contact', 'name');
-  }
-  
-  else if (
-    text.includes('company') ||
-    text.includes('business') ||
-    text.includes('organization') ||
-    text.includes('domain') ||
-    text.includes('technograph') ||
-    text.includes('funding')
-  ) {
-    category = EnrichmentCategory.COMPANY;
-    searchKeywords.push('company', 'business', 'organization', 'domain', 'technographics', 'funding');
-  }
-  
-  else if (
-    text.includes('email') && 
-    (text.includes('find') || text.includes('search') || text.includes('get'))
-  ) {
-    category = EnrichmentCategory.EMAIL;
-    searchKeywords.push('email', 'find email', 'get email', 'email finder');
-  }
-  
-  else if (
-    text.includes('email') &&
-    (text.includes('verif') || text.includes('valid') || text.includes('check'))
-  ) {
-    category = EnrichmentCategory.VERIFICATION;
-    searchKeywords.push('email', 'verify', 'validate', 'verification', 'validation');
-  }
-  
-  else if (
-    text.includes('phone') ||
-    text.includes('mobile') ||
-    text.includes('telephone')
-  ) {
-    category = EnrichmentCategory.PHONE;
-    searchKeywords.push('phone', 'mobile', 'telephone', 'number');
-  }
-  
-  else if (
-    text.includes('twitter') ||
-    text.includes('instagram') ||
-    text.includes('facebook') ||
-    text.includes('social')
-  ) {
-    category = EnrichmentCategory.SOCIAL;
-    searchKeywords.push('social', 'twitter', 'instagram', 'facebook', 'social media');
-  }
-  
-  else if (
-    text.includes('stock') ||
-    text.includes('financial') ||
-    text.includes('revenue') ||
-    text.includes('funding') ||
-    text.includes('price')
-  ) {
-    category = EnrichmentCategory.FINANCIAL;
-    searchKeywords.push('stock', 'financial', 'revenue', 'funding', 'finance');
-  }
-
-  return {
-    ...enrichment,
-    category,
-    searchKeywords
-  };
-}
-
-/**
- * Search enrichments by query string
+ * Search enrichments by query string.
+ * Matches against name, description, data_source, search_keywords, and category names.
+ * Results are sorted by rank (highest first).
  */
 export function searchEnrichments(
-  enrichments: CategorizedEnrichment[],
+  enrichments: Enrichment[],
   query: string
-): CategorizedEnrichment[] {
+): Enrichment[] {
   const lowerQuery = query.toLowerCase();
-  
-  return enrichments.filter(enrichment => {
-    if (enrichment.name.toLowerCase().includes(lowerQuery)) return true;
-    if (enrichment.description.toLowerCase().includes(lowerQuery)) return true;
-    if (enrichment.data_source.toLowerCase().includes(lowerQuery)) return true;
-    if (enrichment.searchKeywords.some(keyword => keyword.includes(lowerQuery))) return true;
-    if (enrichment.category.toLowerCase().includes(lowerQuery)) return true;
-    return false;
-  });
+
+  return enrichments
+    .filter(enrichment => {
+      if (enrichment.name.toLowerCase().includes(lowerQuery)) return true;
+      if (enrichment.description.toLowerCase().includes(lowerQuery)) return true;
+      if (enrichment.data_source.toLowerCase().includes(lowerQuery)) return true;
+      if (enrichment.search_keywords?.toLowerCase().includes(lowerQuery)) return true;
+      if (enrichment.category?.some(c => c.name.toLowerCase().includes(lowerQuery))) return true;
+      return false;
+    })
+    .sort((a, b) => (b.rank || 0) - (a.rank || 0));
 }
 
 /**
- * Filter enrichments by category
+ * Filter enrichments by category name
  */
 export function filterByCategory(
-  enrichments: CategorizedEnrichment[],
-  category: EnrichmentCategory
-): CategorizedEnrichment[] {
-  return enrichments.filter(e => e.category === category);
+  enrichments: Enrichment[],
+  categoryName: string
+): Enrichment[] {
+  const lower = categoryName.toLowerCase();
+  return enrichments.filter(e =>
+    e.category?.some(c => c.name.toLowerCase().includes(lower))
+  );
 }
 
 /**
  * Format enrichment for display
  */
-export function formatEnrichmentForDisplay(enrichment: CategorizedEnrichment): string {
+export function formatEnrichmentForDisplay(enrichment: Enrichment): string {
+  const categoryNames = enrichment.category?.map(c => c.name).join(', ') || 'Uncategorized';
+
   const lines = [
     `ID: ${enrichment.id}`,
     `Name: ${enrichment.name}`,
-    `Category: ${enrichment.category}`,
+    `Category: ${categoryNames}`,
     `Description: ${enrichment.description}`,
     `Data Source: ${enrichment.data_source}`,
     `Price: ${enrichment.price} credits`,
+    enrichment.rank ? `Rank: ${enrichment.rank}` : '',
     enrichment.params ? `Required Parameters: ${enrichment.params.filter(p => p.is_required).map(p => p.name).join(', ')}` : ''
   ];
 
