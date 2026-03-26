@@ -99,6 +99,15 @@ export class DatabarClient {
         throw new Error('Resource has expired. Data is only stored for 1 hour after task completion.');
       }
 
+      if (status === 406) {
+        const detail = typeof data?.detail === 'string' ? data.detail : '';
+        throw new Error(
+          detail ||
+          'Not enough credits or your plan does not include this enrichment. ' +
+          'Check your account at databar.ai/account/billing.'
+        );
+      }
+
       if (status === 429) {
         throw new Error('Rate limit exceeded. Please try again later.');
       }
