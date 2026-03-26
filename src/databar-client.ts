@@ -107,6 +107,22 @@ export class DatabarClient {
         throw new Error(data.error + (data.details ? `: ${data.details}` : ''));
       }
 
+      if (status === 400 && data?.detail) {
+        const detail = data.detail;
+        if (typeof detail === 'string') {
+          throw new Error(detail);
+        }
+        if (Array.isArray(detail)) {
+          const msgs = detail.map((d: any) =>
+            typeof d === 'string' ? d : (d?.msg || JSON.stringify(d))
+          );
+          throw new Error(msgs.join('; '));
+        }
+        if (typeof detail === 'object') {
+          throw new Error(JSON.stringify(detail));
+        }
+      }
+
       throw new Error(`API error (${status}): ${axiosError.message}`);
     }
 

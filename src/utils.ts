@@ -21,16 +21,20 @@ export function searchEnrichments(
   enrichments: Enrichment[],
   query: string
 ): Enrichment[] {
-  const lowerQuery = query.toLowerCase();
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return enrichments;
 
   return enrichments
     .filter(enrichment => {
-      if (enrichment.name.toLowerCase().includes(lowerQuery)) return true;
-      if (enrichment.description.toLowerCase().includes(lowerQuery)) return true;
-      if (enrichment.data_source.toLowerCase().includes(lowerQuery)) return true;
-      if (enrichment.search_keywords?.toLowerCase().includes(lowerQuery)) return true;
-      if (enrichment.category?.some(c => c.name.toLowerCase().includes(lowerQuery))) return true;
-      return false;
+      const fields = [
+        enrichment.name,
+        enrichment.description,
+        enrichment.data_source,
+        enrichment.search_keywords ?? '',
+        ...(enrichment.category?.map(c => c.name) ?? []),
+      ].map(f => f.toLowerCase());
+
+      return words.every(word => fields.some(f => f.includes(word)));
     })
     .sort((a, b) => (b.rank || 0) - (a.rank || 0));
 }

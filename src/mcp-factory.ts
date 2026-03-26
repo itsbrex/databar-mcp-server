@@ -914,13 +914,29 @@ export function createMcpServer(apiKey: string): Server {
             if (msg.includes('not found') || msg.includes('404')) {
               throw new Error(`Failed to add enrichment ${enrichment_id} to table. This enrichment may not support table mode — not all enrichments can be attached to tables. Try a different enrichment ID.`);
             }
-            if (msg.includes('400') || msg.includes('Validation') || msg.includes('Invalid')) {
-              const hint = columnMap
-                ? `\n\nAvailable columns: ${Object.keys(columnMap).filter(k => !uuidPattern.test(k)).join(', ')}`
-                : '';
-              throw new Error(`Failed to add enrichment ${enrichment_id} to table: ${msg}${hint}\n\nCheck that the enrichment ID is correct and all required parameters are mapped.`);
+
+            const isAuthError = /authorization/i.test(msg) || /auth.*invalid/i.test(msg) || /api.?key/i.test(msg);
+            if (isAuthError) {
+              throw new Error(
+                `Failed to add enrichment ${enrichment_id} to table: ${msg}\n\n` +
+                `This enrichment requires a connected API key. ` +
+                `Please connect the required API key in your Databar settings (Settings > Integrations) and try again.`
+              );
             }
-            throw addErr;
+
+            const isRequiredParams = /required param/i.test(msg) || /not all required/i.test(msg);
+            if (isRequiredParams) {
+              throw new Error(
+                `Failed to add enrichment ${enrichment_id} to table: ${msg}\n\n` +
+                `Not all required enrichment parameters are mapped. ` +
+                `Call get_enrichment_details to see which parameters are required, then map each one.`
+              );
+            }
+
+            const columnHint = columnMap
+              ? `\nAvailable columns: ${Object.keys(columnMap).filter(k => !uuidPattern.test(k)).join(', ')}`
+              : '';
+            throw new Error(`Failed to add enrichment ${enrichment_id} to table: ${msg}${columnHint}`);
           }
         }
 
