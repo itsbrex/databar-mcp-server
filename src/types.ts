@@ -133,7 +133,7 @@ export interface AddEnrichmentRequest {
 }
 
 export interface RunTableEnrichmentRequest {
-  run_strategy?: 'run_all' | 'run_empty';
+  run_strategy?: 'run_all' | 'run_empty' | 'run_errors';
   row_ids?: string[];
 }
 

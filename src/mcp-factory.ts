@@ -430,7 +430,7 @@ WORKFLOW:
   },
   {
     name: 'run_table_enrichment',
-    description: 'Trigger an enrichment or waterfall to run on a table. By default runs on all rows. Optionally specify row_ids to run on specific rows, and run_strategy to control empty-row behavior. Works for both enrichments (from add_table_enrichment) and waterfalls (from add_table_waterfall). Subject to spending limits.',
+    description: 'Trigger an enrichment or waterfall to run on a table. By default runs on all rows. Optionally specify row_ids to run on specific rows, and run_strategy to control row selection. Works for both enrichments (from add_table_enrichment) and waterfalls (from add_table_waterfall). Subject to spending limits.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -443,8 +443,8 @@ WORKFLOW:
         },
         run_strategy: {
           type: 'string',
-          enum: ['run_all', 'run_empty'],
-          description: "Which rows to process: 'run_all' (default) runs every row, 'run_empty' skips rows that already have a result."
+          enum: ['run_all', 'run_empty', 'run_errors'],
+          description: "Which rows to process: 'run_all' (default) runs every row, 'run_empty' skips rows that already have a result, 'run_errors' reruns only rows that ended with an error."
         }
       },
       required: ['table_uuid', 'enrichment_id']
