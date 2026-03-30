@@ -4,6 +4,9 @@
 
 import {
   Enrichment,
+  ExporterInfo,
+  ExporterDetails,
+  InstalledExporter,
   Table,
   Column,
   TableEnrichment,
@@ -179,6 +182,54 @@ export function formatColumnForDisplay(column: Column): string {
  */
 export function formatTableEnrichmentForDisplay(enrichment: TableEnrichment): string {
   return `ID: ${enrichment.id} — ${enrichment.name}`;
+}
+
+/**
+ * Search exporters by query string.
+ */
+export function searchExporters(
+  exporters: ExporterInfo[],
+  query: string
+): ExporterInfo[] {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return exporters;
+
+  return exporters.filter(exporter => {
+    const fields = [
+      exporter.name,
+      exporter.description,
+    ].map(f => (f || '').toLowerCase());
+
+    return words.every(word => fields.some(f => f.includes(word)));
+  });
+}
+
+/**
+ * Format exporter for display
+ */
+export function formatExporterForDisplay(exporter: ExporterDetails | ExporterInfo): string {
+  const lines = [
+    `ID: ${exporter.id}`,
+    `Name: ${exporter.name}`,
+    `Description: ${exporter.description}`,
+  ];
+
+  const details = exporter as ExporterDetails;
+  if (details.params) {
+    const required = details.params.filter(p => p.is_required).map(p => p.name);
+    if (required.length > 0) {
+      lines.push(`Required Parameters: ${required.join(', ')}`);
+    }
+  }
+
+  return lines.filter(Boolean).join('\n');
+}
+
+/**
+ * Format table exporter for display
+ */
+export function formatTableExporterForDisplay(exporter: InstalledExporter): string {
+  return `ID: ${exporter.id} — ${exporter.name}`;
 }
 
 /**

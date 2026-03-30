@@ -260,6 +260,55 @@ export interface UpsertRowsResponse {
 }
 
 // ============================================================================
+// Exporter Types
+// ============================================================================
+
+export interface ExporterInfo {
+  id: number;
+  name: string;
+  description: string;
+  dataset: number;
+}
+
+export interface ExporterParam {
+  name: string;
+  is_required: boolean;
+  type_field: string;
+  description: string;
+}
+
+export interface ExporterResponseField {
+  name: string;
+  display_name?: string | null;
+  type_field: string;
+}
+
+export interface ExporterDetails extends ExporterInfo {
+  params?: ExporterParam[];
+  response_fields?: ExporterResponseField[];
+}
+
+export interface AddExporterRequest {
+  exporter: number;
+  mapping: Record<string, { value: string; type: string }>;
+  launch_strategy?: 'run_on_click' | 'run_on_update';
+}
+
+export interface AddExporterResponse {
+  id: number;
+  exporter_name: string;
+}
+
+export interface InstalledExporter {
+  id: number;
+  name: string;
+}
+
+export interface RunTableExporterRequest {
+  run_strategy?: 'run_all' | 'run_empty' | 'run_errors';
+}
+
+// ============================================================================
 // Waterfall Types
 // ============================================================================
 

@@ -33,6 +33,12 @@ import {
   AddWaterfallRequest,
   AddWaterfallResponse,
   InstalledWaterfall,
+  ExporterInfo,
+  ExporterDetails,
+  AddExporterRequest,
+  AddExporterResponse,
+  InstalledExporter,
+  RunTableExporterRequest,
   Folder,
   User,
   DatabarError,
@@ -729,6 +735,78 @@ export class DatabarClient {
       await this.withRetry(() =>
         this.client.delete(`/table/${tableUuid}/columns/${columnId}`)
       );
+    } catch (error) {
+      this.handleError(error);
+    }
+  }
+
+  // ============================================================================
+  // Exporter Methods
+  // ============================================================================
+
+  async getAllExporters(): Promise<ExporterInfo[]> {
+    try {
+      const response = await this.withRetry(() =>
+        this.client.get<ExporterInfo[] | { items?: ExporterInfo[]; results?: ExporterInfo[] }>('/exporters')
+      );
+      const data = response.data;
+      if (Array.isArray(data)) return data;
+      if (data?.items) return data.items;
+      if (data?.results) return data.results;
+      return [];
+    } catch (error) {
+      this.handleError(error);
+    }
+  }
+
+  async getExporterDetails(exporterId: number): Promise<ExporterDetails> {
+    try {
+      const response = await this.withRetry(() =>
+        this.client.get<ExporterDetails>(`/exporters/${exporterId}`)
+      );
+      return response.data;
+    } catch (error) {
+      this.handleError(error);
+    }
+  }
+
+  async addTableExporter(
+    tableUuid: string,
+    data: AddExporterRequest
+  ): Promise<AddExporterResponse> {
+    try {
+      const response = await this.withRetry(() =>
+        this.client.post<AddExporterResponse>(`/table/${tableUuid}/add-exporter`, data)
+      );
+      return response.data;
+    } catch (error) {
+      this.handleError(error);
+    }
+  }
+
+  async getTableExporters(tableUuid: string): Promise<InstalledExporter[]> {
+    try {
+      const response = await this.withRetry(() =>
+        this.client.get<InstalledExporter[]>(`/table/${tableUuid}/exporters`)
+      );
+      return response.data;
+    } catch (error) {
+      this.handleError(error);
+    }
+  }
+
+  async runTableExporter(
+    tableUuid: string,
+    exporterId: string,
+    options?: RunTableExporterRequest
+  ): Promise<any> {
+    try {
+      const response = await this.withRetry(() =>
+        this.client.post(`/table/${tableUuid}/run-exporter/${exporterId}`,
+          options ? options : undefined
+        )
+      );
+      return response.data;
     } catch (error) {
       this.handleError(error);
     }

@@ -22,6 +22,9 @@ import {
   formatTableForDisplay,
   formatColumnForDisplay,
   formatTableEnrichmentForDisplay,
+  searchExporters,
+  formatExporterForDisplay,
+  formatTableExporterForDisplay,
   formatCreateRowsResponse,
   formatPatchRowsResponse,
   formatUpsertRowsResponse
@@ -36,7 +39,7 @@ import {
   SpendingConfig
 } from './guards.js';
 import { auditLog } from './audit.js';
-import { DatabarConfig, Enrichment } from './types.js';
+import { DatabarConfig, Enrichment, ExporterInfo } from './types.js';
 
 const TOOLS: Tool[] = [
   {
@@ -496,6 +499,104 @@ WORKFLOW:
     }
   },
   {
+    name: 'search_exporters',
+    description: 'Search and discover available data exporters (CRM/destination integrations). Use this to find the right exporter for pushing data to external services (e.g., "Google Sheets", "HubSpot", "Salesforce"). Returns a list of matching exporters with their IDs and descriptions.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Search query to find exporters (e.g., "google sheets", "hubspot", "salesforce", "crm")'
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum number of results to return (default: 10)',
+          default: 10
+        }
+      },
+      required: ['query']
+    }
+  },
+  {
+    name: 'get_exporter_details',
+    description: 'Get detailed information about a specific exporter, including its required parameters and output fields. Use this to understand what parameters are needed before adding the exporter to a table.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        exporter_id: { type: 'number', description: 'The exporter ID (from search_exporters)' }
+      },
+      required: ['exporter_id']
+    }
+  },
+  {
+    name: 'add_table_exporter',
+    description: `Add an exporter (CRM/destination) to a table with a parameter-to-column mapping.
+
+IMPORTANT — mapping format:
+Each key is an exporter parameter name. Each value is one of:
+  • { "type": "mapping", "value": "<column-name>" }  — read value from a table column per row. Use the human-readable column name (e.g. "email"). The server accepts column names directly.
+  • { "type": "simple", "value": "<static-value>" }  — pass the same hardcoded value for every row.
+
+WORKFLOW:
+1. Call get_exporter_details to see the parameter names.
+2. Call get_table_columns to see available column names.
+3. Build the mapping using column names (not UUIDs).
+4. The returned exporter_id from this call is the TABLE-EXPORTER id — use it with run_table_exporter (NOT the original exporter_id).`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        table_uuid: { type: 'string', description: 'The UUID of the table' },
+        exporter_id: { type: 'number', description: 'The exporter ID to add (from search_exporters or get_exporter_details)' },
+        mapping: {
+          type: 'object',
+          description: 'Parameter-to-column mapping. Keys = exporter param names. Values = { type: "mapping", value: "column-name" } or { type: "simple", value: "static-value" }',
+          additionalProperties: {
+            type: 'object',
+            properties: {
+              type: { type: 'string', enum: ['mapping', 'simple'] },
+              value: { type: 'string' }
+            },
+            required: ['type', 'value']
+          }
+        },
+        launch_strategy: {
+          type: 'string',
+          enum: ['run_on_click', 'run_on_update'],
+          description: "When to trigger: 'run_on_click' (manual) or 'run_on_update' (auto on row change). Default: 'run_on_click'."
+        }
+      },
+      required: ['table_uuid', 'exporter_id', 'mapping']
+    }
+  },
+  {
+    name: 'get_table_exporters',
+    description: 'List all exporters configured on a table. Returns exporter IDs that can be used with run_table_exporter.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        table_uuid: { type: 'string', description: 'The UUID of the table' }
+      },
+      required: ['table_uuid']
+    }
+  },
+  {
+    name: 'run_table_exporter',
+    description: 'Trigger an exporter to run on a table. By default runs on all rows. Use run_strategy to control row selection. Subject to spending limits.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        table_uuid: { type: 'string', description: 'The UUID of the table' },
+        exporter_id: { type: 'string', description: 'The table exporter ID to run (returned by add_table_exporter)' },
+        run_strategy: {
+          type: 'string',
+          enum: ['run_all', 'run_empty', 'run_errors'],
+          description: "Which rows to process: 'run_all' (default) runs every row, 'run_empty' skips rows that already have a result, 'run_errors' reruns only rows that ended with an error."
+        }
+      },
+      required: ['table_uuid', 'exporter_id']
+    }
+  },
+  {
     name: 'delete_table',
     description: 'Permanently delete a table and all its data.',
     inputSchema: {
@@ -660,6 +761,19 @@ export function createMcpServer(apiKey: string): Server {
     enrichmentsCache = await databarClient.getAllEnrichments();
     enrichmentsCacheTime = now;
     return enrichmentsCache;
+  }
+
+  let exportersCache: ExporterInfo[] | null = null;
+  let exportersCacheTime: number = 0;
+
+  async function getCachedExporters(): Promise<ExporterInfo[]> {
+    const now = Date.now();
+    if (exportersCache && (now - exportersCacheTime) < ENRICHMENTS_CACHE_TTL) {
+      return exportersCache;
+    }
+    exportersCache = await databarClient.getAllExporters();
+    exportersCacheTime = now;
+    return exportersCache;
   }
 
   async function guardSpending(
@@ -1189,6 +1303,115 @@ export function createMcpServer(apiKey: string): Server {
           if (waterfalls.length === 0) return { content: [{ type: 'text', text: 'No waterfalls installed on this table.' }] };
           const lines = waterfalls.map(w => `ID: ${w.id} — ${w.waterfall_name}`).join('\n');
           return { content: [{ type: 'text', text: `Table has ${waterfalls.length} waterfall(s):\n\n${lines}\n\nUse the ID with run_table_enrichment to trigger a run.` }] };
+        }
+
+        case 'search_exporters': {
+          const { query, limit = 10 } = args as { query: string; limit?: number };
+          auditLog({ timestamp: ts, tool: name, params: { query, limit }, result: 'success' });
+          let exporters = await getCachedExporters();
+          exporters = searchExporters(exporters, query).slice(0, limit);
+          if (exporters.length === 0) {
+            return { content: [{ type: 'text', text: `No exporters found matching "${query}".` }] };
+          }
+          return {
+            content: [{ type: 'text', text: safeResult(
+              `Found ${exporters.length} exporter(s):\n\n${exporters.map(formatExporterForDisplay).join('\n\n---\n\n')}`
+            )}]
+          };
+        }
+
+        case 'get_exporter_details': {
+          const { exporter_id } = args as { exporter_id: number };
+          const details = await databarClient.getExporterDetails(exporter_id);
+          auditLog({ timestamp: ts, tool: name, params: { exporter_id }, result: 'success' });
+          return { content: [{ type: 'text', text: safeResult(formatExporterForDisplay(details)) }] };
+        }
+
+        case 'add_table_exporter': {
+          const { table_uuid, exporter_id, mapping } = args as {
+            table_uuid: string; exporter_id: number; mapping: Record<string, any>;
+          };
+
+          const resolvedMapping: Record<string, any> = {};
+          let columnMap: Record<string, string> | null = null;
+          const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+          for (const [param, entry] of Object.entries(mapping)) {
+            if (typeof entry !== 'object' || entry?.type !== 'mapping') {
+              resolvedMapping[param] = entry;
+              continue;
+            }
+            const value = String(entry.value || '');
+            if (uuidPattern.test(value)) {
+              resolvedMapping[param] = entry;
+              continue;
+            }
+            if (!columnMap) {
+              const cols = await databarClient.getTableColumns(table_uuid);
+              columnMap = {};
+              for (const c of cols) {
+                columnMap[c.name] = c.identifier;
+                columnMap[c.name.toLowerCase()] = c.identifier;
+              }
+            }
+            const uuid = columnMap[value] || columnMap[value.toLowerCase()];
+            if (uuid) {
+              resolvedMapping[param] = { ...entry, value: uuid };
+            } else {
+              const validNames = Object.keys(columnMap).filter(k => !uuidPattern.test(k)).join(', ');
+              return { content: [{ type: 'text', text: `Column "${value}" not found on this table.\n\nValid column names: ${validNames}\n\nUse one of these names in your mapping.` }], isError: true };
+            }
+          }
+
+          try {
+            const beforeExporters = await databarClient.getTableExporters(table_uuid);
+            const beforeIds = new Set(beforeExporters.map(e => e.id));
+
+            const addPayload: any = { exporter: exporter_id, mapping: resolvedMapping };
+            if ((args as any).launch_strategy) {
+              addPayload.launch_strategy = (args as any).launch_strategy;
+            }
+            await databarClient.addTableExporter(table_uuid, addPayload);
+
+            const afterExporters = await databarClient.getTableExporters(table_uuid);
+            const newExporters = afterExporters.filter(e => !beforeIds.has(e.id));
+            const added = newExporters.length > 0 ? newExporters[0] : afterExporters[afterExporters.length - 1];
+
+            auditLog({ timestamp: ts, tool: name, params: { table_uuid, exporter_id }, result: 'success' });
+            return { content: [{ type: 'text', text: safeResult(
+              `Exporter added to table successfully.\n\nTable exporter ID: ${added?.id ?? 'unknown'}\nName: ${added?.name ?? 'unknown'}\n\nUse this table exporter ID (${added?.id ?? '<id>'}) with run_table_exporter to trigger a run.`
+            )}] };
+          } catch (addErr: any) {
+            const msg = addErr.message || 'Unknown error';
+            const columnHint = columnMap
+              ? `\nAvailable columns: ${Object.keys(columnMap).filter(k => !uuidPattern.test(k)).join(', ')}`
+              : '';
+            throw new Error(`Failed to add exporter ${exporter_id} to table: ${msg}${columnHint}`);
+          }
+        }
+
+        case 'get_table_exporters': {
+          const { table_uuid } = args as { table_uuid: string };
+          const exporters = await databarClient.getTableExporters(table_uuid);
+          auditLog({ timestamp: ts, tool: name, params: { table_uuid }, result: 'success' });
+          if (exporters.length === 0) return { content: [{ type: 'text', text: 'No exporters configured on this table.' }] };
+          return { content: [{ type: 'text', text: `Table has ${exporters.length} exporter(s):\n\n${exporters.map(formatTableExporterForDisplay).join('\n')}\n\nUse the ID with run_table_exporter to trigger a run.` }] };
+        }
+
+        case 'run_table_exporter': {
+          const { table_uuid, exporter_id, run_strategy = 'run_all' } = args as {
+            table_uuid: string; exporter_id: string; run_strategy?: string;
+          };
+
+          const payload: any = {};
+          if (run_strategy && run_strategy !== 'run_all') {
+            payload.run_strategy = run_strategy;
+          }
+
+          const result = await databarClient.runTableExporter(table_uuid, exporter_id, payload);
+          auditLog({ timestamp: ts, tool: name, params: { table_uuid, exporter_id, run_strategy }, result: 'success' });
+          const rows = result?.processing_rows ?? 'unknown';
+          return { content: [{ type: 'text', text: `Exporter run started. Processing ${rows} row(s). The exporter is now running in the background.` }] };
         }
 
         case 'delete_table': {
