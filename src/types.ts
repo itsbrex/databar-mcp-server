@@ -129,6 +129,27 @@ export interface TableEnrichment {
 export interface AddEnrichmentRequest {
   enrichment: number;
   mapping: Record<string, { value: string; type: string }>;
+  launch_strategy?: 'run_on_click' | 'run_on_update';
+}
+
+export interface RunTableEnrichmentRequest {
+  run_strategy?: 'run_all' | 'run_empty';
+  row_ids?: string[];
+}
+
+export interface DeleteRowsRequest {
+  row_ids: string[];
+}
+
+export interface CreateColumnRequest {
+  name: string;
+  type?: string;
+}
+
+export interface CreateColumnResponse {
+  identifier: string;
+  name: string;
+  type_of_value: string;
 }
 
 export interface AddWaterfallRequest {
@@ -307,6 +328,18 @@ export interface WaterfallTaskResponse {
   status: TaskStatus;
   data?: WaterfallResultData[];
   error?: string | null;
+}
+
+// ============================================================================
+// Folder Types
+// ============================================================================
+
+export interface Folder {
+  id: number;
+  name: string;
+  created_at?: string;
+  updated_at?: string;
+  table_count?: number;
 }
 
 // ============================================================================

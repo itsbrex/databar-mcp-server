@@ -418,6 +418,11 @@ WORKFLOW:
             },
             required: ['type', 'value']
           }
+        },
+        launch_strategy: {
+          type: 'string',
+          enum: ['run_on_click', 'run_on_update'],
+          description: "When to trigger: 'run_on_click' (manual) or 'run_on_update' (auto on row change). Default: 'run_on_click'."
         }
       },
       required: ['table_uuid', 'enrichment_id', 'mapping']
@@ -425,12 +430,22 @@ WORKFLOW:
   },
   {
     name: 'run_table_enrichment',
-    description: 'Trigger an enrichment or waterfall to run on all rows in a table. Works for both enrichments (from add_table_enrichment) and waterfalls (from add_table_waterfall). Subject to spending limits.',
+    description: 'Trigger an enrichment or waterfall to run on a table. By default runs on all rows. Optionally specify row_ids to run on specific rows, and run_strategy to control empty-row behavior. Works for both enrichments (from add_table_enrichment) and waterfalls (from add_table_waterfall). Subject to spending limits.',
     inputSchema: {
       type: 'object',
       properties: {
         table_uuid: { type: 'string', description: 'The UUID of the table' },
-        enrichment_id: { type: 'string', description: 'The table enrichment/waterfall ID to run (returned by add_table_enrichment or add_table_waterfall)' }
+        enrichment_id: { type: 'string', description: 'The table enrichment/waterfall ID to run (returned by add_table_enrichment or add_table_waterfall)' },
+        row_ids: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional: specific row IDs to process. When omitted, processes all rows.'
+        },
+        run_strategy: {
+          type: 'string',
+          enum: ['run_all', 'run_empty'],
+          description: "Which rows to process: 'run_all' (default) runs every row, 'run_empty' skips rows that already have a result."
+        }
       },
       required: ['table_uuid', 'enrichment_id']
     }
@@ -476,6 +491,135 @@ WORKFLOW:
       type: 'object',
       properties: {
         table_uuid: { type: 'string', description: 'The UUID of the table' }
+      },
+      required: ['table_uuid']
+    }
+  },
+  {
+    name: 'delete_table',
+    description: 'Permanently delete a table and all its data.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        table_uuid: { type: 'string', description: 'The UUID of the table to delete' }
+      },
+      required: ['table_uuid']
+    }
+  },
+  {
+    name: 'rename_table',
+    description: 'Rename an existing table.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        table_uuid: { type: 'string', description: 'The UUID of the table' },
+        name: { type: 'string', description: 'The new name for the table' }
+      },
+      required: ['table_uuid', 'name']
+    }
+  },
+  {
+    name: 'delete_rows',
+    description: 'Delete specific rows from a table by their row IDs.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        table_uuid: { type: 'string', description: 'The UUID of the table' },
+        row_ids: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Array of row IDs to delete',
+          minItems: 1
+        }
+      },
+      required: ['table_uuid', 'row_ids']
+    }
+  },
+  {
+    name: 'create_column',
+    description: 'Add a new column to an existing table.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        table_uuid: { type: 'string', description: 'The UUID of the table' },
+        name: { type: 'string', description: 'Column display name' },
+        type: { type: 'string', description: "Column type (default: 'text')", default: 'text' }
+      },
+      required: ['table_uuid', 'name']
+    }
+  },
+  {
+    name: 'rename_column',
+    description: 'Rename an existing column on a table.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        table_uuid: { type: 'string', description: 'The UUID of the table' },
+        column_id: { type: 'string', description: 'The UUID of the column to rename' },
+        name: { type: 'string', description: 'The new column name' }
+      },
+      required: ['table_uuid', 'column_id', 'name']
+    }
+  },
+  {
+    name: 'delete_column',
+    description: 'Delete a column from a table.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        table_uuid: { type: 'string', description: 'The UUID of the table' },
+        column_id: { type: 'string', description: 'The UUID of the column to delete' }
+      },
+      required: ['table_uuid', 'column_id']
+    }
+  },
+  {
+    name: 'create_folder',
+    description: 'Create a new folder to organize tables in your workspace.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Folder name' }
+      },
+      required: ['name']
+    }
+  },
+  {
+    name: 'list_folders',
+    description: 'List all folders in your workspace.',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'rename_folder',
+    description: 'Rename an existing folder.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        folder_id: { type: 'number', description: 'The folder ID' },
+        name: { type: 'string', description: 'The new folder name' }
+      },
+      required: ['folder_id', 'name']
+    }
+  },
+  {
+    name: 'delete_folder',
+    description: 'Delete a folder. Tables inside the folder are NOT deleted.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        folder_id: { type: 'number', description: 'The folder ID to delete' }
+      },
+      required: ['folder_id']
+    }
+  },
+  {
+    name: 'move_table_to_folder',
+    description: 'Move a table into a folder, or remove it from its current folder by passing folder_id as null.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        table_uuid: { type: 'string', description: 'The UUID of the table to move' },
+        folder_id: { type: ['number', 'null'], description: 'Target folder ID, or null to remove from folder' }
       },
       required: ['table_uuid']
     }
@@ -898,7 +1042,11 @@ export function createMcpServer(apiKey: string): Server {
             const beforeEnrichments = await databarClient.getTableEnrichments(table_uuid);
             const beforeIds = new Set(beforeEnrichments.map(e => e.id));
 
-            await databarClient.addTableEnrichment(table_uuid, { enrichment: enrichment_id, mapping: resolvedMapping });
+            const addPayload: any = { enrichment: enrichment_id, mapping: resolvedMapping };
+            if ((args as any).launch_strategy) {
+              addPayload.launch_strategy = (args as any).launch_strategy;
+            }
+            await databarClient.addTableEnrichment(table_uuid, addPayload);
 
             // Fetch the updated list and surface the new table-enrichment ID
             const afterEnrichments = await databarClient.getTableEnrichments(table_uuid);
@@ -941,14 +1089,22 @@ export function createMcpServer(apiKey: string): Server {
         }
 
         case 'run_table_enrichment': {
-          const { table_uuid, enrichment_id } = args as { table_uuid: string; enrichment_id: string };
+          const { table_uuid, enrichment_id, row_ids, run_strategy } = args as {
+            table_uuid: string; enrichment_id: string; row_ids?: string[]; run_strategy?: string;
+          };
           const guard = await guardSpending(name, 0, { table_uuid, enrichment_id });
           if (guard) return guard;
-          const result = await databarClient.runTableEnrichment(table_uuid, enrichment_id);
-          auditLog({ timestamp: ts, tool: name, params: { table_uuid, enrichment_id }, result: 'success' });
+          const runOptions: any = {};
+          if (row_ids && row_ids.length > 0) runOptions.row_ids = row_ids;
+          if (run_strategy) runOptions.run_strategy = run_strategy;
+          const result = await databarClient.runTableEnrichment(
+            table_uuid, enrichment_id, Object.keys(runOptions).length > 0 ? runOptions : undefined
+          );
+          auditLog({ timestamp: ts, tool: name, params: { table_uuid, enrichment_id, row_ids, run_strategy }, result: 'success' });
+          const rowNote = row_ids ? `on ${row_ids.length} specific row(s)` : 'on all applicable rows';
           return { content: [{ type: 'text', text:
             `Table enrichment/waterfall triggered successfully.\n\n` +
-            `It is now running asynchronously on all applicable rows in the table. ` +
+            `It is now running asynchronously ${rowNote} in the table. ` +
             `Results will appear as new columns on each row once processing completes.\n\n` +
             `To check progress, use get_table_rows to inspect the table — output columns will populate as rows are processed.`
           }] };
@@ -1033,6 +1189,91 @@ export function createMcpServer(apiKey: string): Server {
           if (waterfalls.length === 0) return { content: [{ type: 'text', text: 'No waterfalls installed on this table.' }] };
           const lines = waterfalls.map(w => `ID: ${w.id} — ${w.waterfall_name}`).join('\n');
           return { content: [{ type: 'text', text: `Table has ${waterfalls.length} waterfall(s):\n\n${lines}\n\nUse the ID with run_table_enrichment to trigger a run.` }] };
+        }
+
+        case 'delete_table': {
+          const { table_uuid } = args as { table_uuid: string };
+          await databarClient.deleteTable(table_uuid);
+          auditLog({ timestamp: ts, tool: name, params: { table_uuid }, result: 'success' });
+          return { content: [{ type: 'text', text: `Table ${table_uuid} deleted successfully.` }] };
+        }
+
+        case 'rename_table': {
+          const { table_uuid, name: newName } = args as { table_uuid: string; name: string };
+          const table = await databarClient.renameTable(table_uuid, newName);
+          auditLog({ timestamp: ts, tool: name, params: { table_uuid, name: newName }, result: 'success' });
+          return { content: [{ type: 'text', text: `Table renamed successfully.\n\n${formatTableForDisplay(table)}` }] };
+        }
+
+        case 'delete_rows': {
+          const { table_uuid, row_ids } = args as { table_uuid: string; row_ids: string[] };
+          await databarClient.deleteRows(table_uuid, row_ids);
+          auditLog({ timestamp: ts, tool: name, params: { table_uuid, count: row_ids.length }, result: 'success' });
+          return { content: [{ type: 'text', text: `Successfully deleted ${row_ids.length} row(s) from table ${table_uuid}.` }] };
+        }
+
+        case 'create_column': {
+          const { table_uuid, name: colName, type: colType = 'text' } = args as {
+            table_uuid: string; name: string; type?: string;
+          };
+          const col = await databarClient.createColumn(table_uuid, colName, colType);
+          auditLog({ timestamp: ts, tool: name, params: { table_uuid, name: colName, type: colType }, result: 'success' });
+          return { content: [{ type: 'text', text: `Column created successfully.\n\nID: ${col.identifier}\nName: ${col.name}\nType: ${col.type_of_value}` }] };
+        }
+
+        case 'rename_column': {
+          const { table_uuid, column_id, name: newColName } = args as {
+            table_uuid: string; column_id: string; name: string;
+          };
+          const col = await databarClient.renameColumn(table_uuid, column_id, newColName);
+          auditLog({ timestamp: ts, tool: name, params: { table_uuid, column_id, name: newColName }, result: 'success' });
+          return { content: [{ type: 'text', text: `Column renamed successfully.\n\nID: ${col.identifier}\nName: ${col.name}\nType: ${col.type_of_value}` }] };
+        }
+
+        case 'delete_column': {
+          const { table_uuid, column_id } = args as { table_uuid: string; column_id: string };
+          await databarClient.deleteColumn(table_uuid, column_id);
+          auditLog({ timestamp: ts, tool: name, params: { table_uuid, column_id }, result: 'success' });
+          return { content: [{ type: 'text', text: `Column ${column_id} deleted successfully from table ${table_uuid}.` }] };
+        }
+
+        case 'create_folder': {
+          const { name: folderName } = args as { name: string };
+          const folder = await databarClient.createFolder(folderName);
+          auditLog({ timestamp: ts, tool: name, params: { name: folderName }, result: 'success' });
+          return { content: [{ type: 'text', text: `Folder created successfully.\n\nID: ${folder.id}\nName: ${folder.name}` }] };
+        }
+
+        case 'list_folders': {
+          const folders = await databarClient.listFolders();
+          auditLog({ timestamp: ts, tool: name, params: {}, result: 'success' });
+          if (folders.length === 0) return { content: [{ type: 'text', text: 'No folders found in your workspace.' }] };
+          const lines = folders.map(f => `ID: ${f.id} — ${f.name} (${f.table_count ?? 0} tables)`).join('\n');
+          return { content: [{ type: 'text', text: `Found ${folders.length} folder(s):\n\n${lines}` }] };
+        }
+
+        case 'rename_folder': {
+          const { folder_id, name: newFolderName } = args as { folder_id: number; name: string };
+          const folder = await databarClient.renameFolder(folder_id, newFolderName);
+          auditLog({ timestamp: ts, tool: name, params: { folder_id, name: newFolderName }, result: 'success' });
+          return { content: [{ type: 'text', text: `Folder renamed successfully.\n\nID: ${folder.id}\nName: ${folder.name}` }] };
+        }
+
+        case 'delete_folder': {
+          const { folder_id } = args as { folder_id: number };
+          await databarClient.deleteFolder(folder_id);
+          auditLog({ timestamp: ts, tool: name, params: { folder_id }, result: 'success' });
+          return { content: [{ type: 'text', text: `Folder ${folder_id} deleted successfully. Tables from this folder have been moved to root.` }] };
+        }
+
+        case 'move_table_to_folder': {
+          const { table_uuid, folder_id = null } = args as { table_uuid: string; folder_id?: number | null };
+          await databarClient.moveTableToFolder(table_uuid, folder_id);
+          auditLog({ timestamp: ts, tool: name, params: { table_uuid, folder_id }, result: 'success' });
+          const msg = folder_id != null
+            ? `Table ${table_uuid} moved to folder ${folder_id}.`
+            : `Table ${table_uuid} removed from its folder.`;
+          return { content: [{ type: 'text', text: msg }] };
         }
 
         case 'get_user_balance': {

@@ -16,6 +16,10 @@ import {
   Column,
   TableEnrichment,
   AddEnrichmentRequest,
+  RunTableEnrichmentRequest,
+  DeleteRowsRequest,
+  CreateColumnRequest,
+  CreateColumnResponse,
   CreateRowsRequest,
   CreateRowsResponse,
   PatchRowsRequest,
@@ -29,6 +33,7 @@ import {
   AddWaterfallRequest,
   AddWaterfallResponse,
   InstalledWaterfall,
+  Folder,
   User,
   DatabarError,
   PaginationOptions
@@ -510,11 +515,14 @@ export class DatabarClient {
 
   async runTableEnrichment(
     tableUuid: string,
-    enrichmentId: string
+    enrichmentId: string,
+    options?: RunTableEnrichmentRequest
   ): Promise<any> {
     try {
       const response = await this.withRetry(() =>
-        this.client.post(`/table/${tableUuid}/run-enrichment/${enrichmentId}`)
+        this.client.post(`/table/${tableUuid}/run-enrichment/${enrichmentId}`,
+          options ? options : undefined
+        )
       );
       return response.data;
     } catch (error) {
@@ -661,6 +669,130 @@ export class DatabarClient {
     }
 
     return { results: allResults };
+  }
+
+  async deleteTable(tableUuid: string): Promise<void> {
+    try {
+      await this.withRetry(() =>
+        this.client.delete(`/table/${tableUuid}`)
+      );
+    } catch (error) {
+      this.handleError(error);
+    }
+  }
+
+  async renameTable(tableUuid: string, name: string): Promise<Table> {
+    try {
+      const response = await this.withRetry(() =>
+        this.client.patch<Table>(`/table/${tableUuid}`, { name })
+      );
+      return response.data;
+    } catch (error) {
+      this.handleError(error);
+    }
+  }
+
+  async deleteRows(tableUuid: string, rowIds: string[]): Promise<void> {
+    try {
+      await this.withRetry(() =>
+        this.client.post(`/table/${tableUuid}/rows/delete`, { row_ids: rowIds })
+      );
+    } catch (error) {
+      this.handleError(error);
+    }
+  }
+
+  async createColumn(tableUuid: string, name: string, type: string = 'text'): Promise<CreateColumnResponse> {
+    try {
+      const response = await this.withRetry(() =>
+        this.client.post<CreateColumnResponse>(`/table/${tableUuid}/columns`, { name, type })
+      );
+      return response.data;
+    } catch (error) {
+      this.handleError(error);
+    }
+  }
+
+  async renameColumn(tableUuid: string, columnId: string, name: string): Promise<CreateColumnResponse> {
+    try {
+      const response = await this.withRetry(() =>
+        this.client.patch<CreateColumnResponse>(`/table/${tableUuid}/columns/${columnId}`, { name })
+      );
+      return response.data;
+    } catch (error) {
+      this.handleError(error);
+    }
+  }
+
+  async deleteColumn(tableUuid: string, columnId: string): Promise<void> {
+    try {
+      await this.withRetry(() =>
+        this.client.delete(`/table/${tableUuid}/columns/${columnId}`)
+      );
+    } catch (error) {
+      this.handleError(error);
+    }
+  }
+
+  // ============================================================================
+  // Folder Methods
+  // ============================================================================
+
+  async createFolder(name: string): Promise<Folder> {
+    try {
+      const response = await this.withRetry(() =>
+        this.client.post<Folder>('/folders', { name })
+      );
+      return response.data;
+    } catch (error) {
+      this.handleError(error);
+    }
+  }
+
+  async listFolders(): Promise<Folder[]> {
+    try {
+      const response = await this.withRetry(() =>
+        this.client.get<Folder[]>('/folders')
+      );
+      const data = response.data;
+      return Array.isArray(data) ? data : (data as any).results || [];
+    } catch (error) {
+      this.handleError(error);
+    }
+  }
+
+  async renameFolder(folderId: number, name: string): Promise<Folder> {
+    try {
+      const response = await this.withRetry(() =>
+        this.client.patch<Folder>(`/folders/${folderId}`, { name })
+      );
+      return response.data;
+    } catch (error) {
+      this.handleError(error);
+    }
+  }
+
+  async deleteFolder(folderId: number): Promise<void> {
+    try {
+      await this.withRetry(() =>
+        this.client.delete(`/folders/${folderId}`)
+      );
+    } catch (error) {
+      this.handleError(error);
+    }
+  }
+
+  async moveTableToFolder(tableUuid: string, folderId?: number | null): Promise<any> {
+    try {
+      const payload: Record<string, any> = { table_uuid: tableUuid };
+      if (folderId != null) payload.folder_id = folderId;
+      const response = await this.withRetry(() =>
+        this.client.post('/folders/move-table', payload)
+      );
+      return response.data;
+    } catch (error) {
+      this.handleError(error);
+    }
   }
 
   // ============================================================================
