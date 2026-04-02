@@ -16,33 +16,6 @@ import {
 } from './types.js';
 
 /**
- * Search enrichments by query string.
- * Matches against name, description, data_source, search_keywords, and category names.
- * Results are sorted by rank (highest first).
- */
-export function searchEnrichments(
-  enrichments: Enrichment[],
-  query: string
-): Enrichment[] {
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return enrichments;
-
-  return enrichments
-    .filter(enrichment => {
-      const fields = [
-        enrichment.name,
-        enrichment.description,
-        enrichment.data_source,
-        enrichment.search_keywords ?? '',
-        ...(enrichment.category?.map(c => c.name) ?? []),
-      ].map(f => f.toLowerCase());
-
-      return words.every(word => fields.some(f => f.includes(word)));
-    })
-    .sort((a, b) => (b.rank || 0) - (a.rank || 0));
-}
-
-/**
  * Filter enrichments by category name
  */
 export function filterByCategory(

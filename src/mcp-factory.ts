@@ -12,8 +12,6 @@ import {
 import { DatabarClient } from './databar-client.js';
 import { Cache } from './cache.js';
 import {
-  searchEnrichments,
-  filterByCategory,
   formatEnrichmentForDisplay,
   formatWaterfallForDisplay,
   formatResults,
@@ -29,6 +27,7 @@ import {
   formatPatchRowsResponse,
   formatUpsertRowsResponse
 } from './utils.js';
+import { EnrichmentSearchIndex } from './search-index.js';
 import {
   loadSpendingConfig,
   checkSpendingGuard,
@@ -760,6 +759,7 @@ export function createMcpServer(apiKey: string): Server {
   let enrichmentsCache: Enrichment[] | null = null;
   let enrichmentsCacheTime: number = 0;
   const ENRICHMENTS_CACHE_TTL = 5 * 60 * 1000;
+  const searchIndex = new EnrichmentSearchIndex();
 
   async function getCachedEnrichments(): Promise<Enrichment[]> {
     const now = Date.now();
@@ -768,6 +768,7 @@ export function createMcpServer(apiKey: string): Server {
     }
     enrichmentsCache = await databarClient.getAllEnrichments();
     enrichmentsCacheTime = now;
+    searchIndex.rebuild(enrichmentsCache);
     return enrichmentsCache;
   }
 
@@ -822,9 +823,8 @@ export function createMcpServer(apiKey: string): Server {
             query: string; category?: string; limit?: number;
           };
           auditLog({ timestamp: ts, tool: name, params: { query, category, limit }, result: 'success' });
-          let enrichments = await getCachedEnrichments();
-          if (category) enrichments = filterByCategory(enrichments, category);
-          enrichments = searchEnrichments(enrichments, query).slice(0, limit);
+          await getCachedEnrichments();
+          const enrichments = searchIndex.search(query, limit, category);
           if (enrichments.length === 0) {
             return { content: [{ type: 'text', text: `No enrichments found matching "${query}".` }] };
           }
