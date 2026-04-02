@@ -563,6 +563,14 @@ WORKFLOW:
           type: 'string',
           enum: ['run_on_click', 'run_on_update'],
           description: "When to trigger: 'run_on_click' (manual) or 'run_on_update' (auto on row change). Default: 'run_on_click'."
+        },
+        authorization: {
+          type: 'number',
+          description: 'ID of the API key / OAuth connection to use. Required for exporters that need user authorization. If omitted, the system auto-selects the first available key.'
+        },
+        custom_body_template: {
+          type: 'string',
+          description: 'Custom JSON body template. Column values are referenced via {column_internal_name} placeholders. When provided, mapping is ignored.'
         }
       },
       required: ['table_uuid', 'exporter_id', 'mapping']
@@ -1328,8 +1336,9 @@ export function createMcpServer(apiKey: string): Server {
         }
 
         case 'add_table_exporter': {
-          const { table_uuid, exporter_id, mapping } = args as {
+          const { table_uuid, exporter_id, mapping, authorization, custom_body_template } = args as {
             table_uuid: string; exporter_id: number; mapping: Record<string, any>;
+            authorization?: number; custom_body_template?: string;
           };
 
           const resolvedMapping: Record<string, any> = {};
@@ -1370,6 +1379,12 @@ export function createMcpServer(apiKey: string): Server {
             const addPayload: any = { exporter: exporter_id, mapping: resolvedMapping };
             if ((args as any).launch_strategy) {
               addPayload.launch_strategy = (args as any).launch_strategy;
+            }
+            if (authorization !== undefined) {
+              addPayload.authorization = authorization;
+            }
+            if (custom_body_template) {
+              addPayload.custom_body_template = custom_body_template;
             }
             await databarClient.addTableExporter(table_uuid, addPayload);
 

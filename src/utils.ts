@@ -222,6 +222,18 @@ export function formatExporterForDisplay(exporter: ExporterDetails | ExporterInf
     }
   }
 
+  if (details.authorization) {
+    lines.push(`Authorization Required: ${details.authorization.required ? 'Yes' : 'No'}`);
+    if (details.authorization.connections.length > 0) {
+      const conns = details.authorization.connections.map(
+        c => `  - ID: ${c.id}, Name: ${c.name}, Type: ${c.type}`
+      );
+      lines.push(`Available Connections:\n${conns.join('\n')}`);
+    } else if (details.authorization.required) {
+      lines.push('Available Connections: None (connect via Databar UI first)');
+    }
+  }
+
   return lines.filter(Boolean).join('\n');
 }
 

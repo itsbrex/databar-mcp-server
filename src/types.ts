@@ -283,15 +283,29 @@ export interface ExporterResponseField {
   type_field: string;
 }
 
+export interface ExporterConnection {
+  id: number;
+  name: string;
+  type: string;
+}
+
+export interface ExporterAuthorization {
+  required: boolean;
+  connections: ExporterConnection[];
+}
+
 export interface ExporterDetails extends ExporterInfo {
   params?: ExporterParam[];
   response_fields?: ExporterResponseField[];
+  authorization?: ExporterAuthorization;
 }
 
 export interface AddExporterRequest {
   exporter: number;
   mapping: Record<string, { value: string; type: string }>;
   launch_strategy?: 'run_on_click' | 'run_on_update';
+  authorization?: number;
+  custom_body_template?: string;
 }
 
 export interface AddExporterResponse {
