@@ -164,7 +164,7 @@ export class DatabarClient {
 
         if (axios.isAxiosError(error)) {
           const status = error.response?.status;
-          if (status && status >= 400 && status < 500 && status !== 429) {
+          if (status && status >= 400 && status < 500) {
             throw error;
           }
         }
