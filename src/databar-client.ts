@@ -188,7 +188,9 @@ export class DatabarClient {
   async getAllEnrichments(): Promise<Enrichment[]> {
     try {
       const response = await this.withRetry(() =>
-        this.client.get<Enrichment[] | { items?: Enrichment[]; results?: Enrichment[] }>('/enrichments')
+        this.client.get<Enrichment[] | { items?: Enrichment[]; results?: Enrichment[] }>('/enrichments', {
+          params: { include_search_meta: true },
+        })
       );
       const data = response.data;
       if (Array.isArray(data)) return data;
