@@ -137,6 +137,7 @@ export function formatTableForDisplay(table: Table): string {
   return [
     `UUID: ${table.identifier}`,
     `Name: ${table.name}`,
+    `URL: ${table.table_url}`,
     `Created: ${table.created_at}`,
     `Updated: ${table.updated_at}`
   ].join('\n');

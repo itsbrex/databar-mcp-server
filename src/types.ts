@@ -110,6 +110,7 @@ export interface Table {
   name: string;
   created_at: string;
   updated_at: string;
+  table_url: string;
 }
 
 export interface Column {
@@ -414,6 +415,7 @@ export interface User {
   email: string;
   balance: number;
   plan: string;
+  workspace?: string;
 }
 
 // ============================================================================

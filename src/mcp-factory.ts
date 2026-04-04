@@ -1027,7 +1027,7 @@ export function createMcpServer(apiKey: string): Server {
           auditLog({ timestamp: ts, tool: name, params: {}, result: 'success' });
           if (tables.length === 0) return { content: [{ type: 'text', text: 'No tables found in your workspace.' }] };
           return { content: [{ type: 'text', text: safeResult(
-            `Found ${tables.length} table(s):\n\n${tables.map(formatTableForDisplay).join('\n\n---\n\n')}`
+            `Found ${tables.length} table(s):\n\n${tables.map(t => formatTableForDisplay(t)).join('\n\n---\n\n')}`
           )}] };
         }
 
@@ -1556,7 +1556,7 @@ export function createMcpServer(apiKey: string): Server {
           const user = await databarClient.getUserInfo();
           auditLog({ timestamp: ts, tool: name, params: {}, result: 'success' });
           return {
-            content: [{ type: 'text', text: `User Account Information:\n\nName: ${user.first_name || 'N/A'}\nEmail: ${user.email}\nBalance: ${user.balance} credits\nPlan: ${user.plan}` }]
+            content: [{ type: 'text', text: `User Account Information:\n\nName: ${user.first_name || 'N/A'}\nEmail: ${user.email}\nBalance: ${user.balance} credits\nPlan: ${user.plan}\nWorkspace: ${user.workspace || 'N/A'}` }]
           };
         }
 
