@@ -147,7 +147,7 @@ export function formatTableForDisplay(table: Table): string {
  */
 export function formatColumnForDisplay(column: Column): string {
   const filterName = column.additional_intenal_name ? ` | filter_name: ${column.additional_intenal_name}` : '';
-  return `${column.name} (${column.type_of_value}) [${column.identifier}]${filterName}`;
+  return `${column.name} (${column.type_of_value}) [${column.identifier}] | internal_name: ${column.internal_name}${filterName}`;
 }
 
 /**

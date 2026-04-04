@@ -38,7 +38,7 @@ import {
   SpendingConfig
 } from './guards.js';
 import { auditLog } from './audit.js';
-import { DatabarConfig, Enrichment, ExporterInfo } from './types.js';
+import { Column, DatabarConfig, Enrichment, ExporterInfo } from './types.js';
 
 const TOOLS: Tool[] = [
   {
@@ -397,12 +397,12 @@ const TOOLS: Tool[] = [
 IMPORTANT — mapping format:
 Each key is an enrichment parameter name. Each value is one of:
   • { "type": "mapping", "value": "<column-name>" }  — read value from a table column per row. Use the human-readable column name (e.g. "email"). The server accepts column names directly.
-  • { "type": "simple", "value": "<static-value>" }  — pass the same hardcoded value for every row.
+  • { "type": "simple", "value": "<static-value>" }  — pass the same hardcoded value for every row. IMPORTANT: simple values can embed column references using {column_internal_name} syntax (e.g. "Find the industry of {column1}"). The internal_name for each column is shown by get_table_columns. At runtime, these placeholders are replaced with actual column values per row. You can also use human-readable column names (e.g. {Company Website}) — the server will auto-resolve them to internal names. Use {?column_name} to mark a column reference as optional (row won't fail if the column is empty).
 
 WORKFLOW:
 1. Call get_enrichment_details to see the parameter names.
-2. Call get_table_columns to see available column names.
-3. Build the mapping using column names (not UUIDs).
+2. Call get_table_columns to see available column names and their internal_names.
+3. Build the mapping using column names (not UUIDs). For text/textarea parameters that should incorporate column data, use "simple" type with {column_internal_name} placeholders in the value.
 4. The returned enrichment_id from this call is the TABLE-ENRICHMENT id — use it with run_table_enrichment (NOT the original enrichment_id).`,
     inputSchema: {
       type: 'object',
@@ -411,7 +411,7 @@ WORKFLOW:
         enrichment_id: { type: 'number', description: 'The enrichment ID to add (from search_enrichments or get_enrichment_details)' },
         mapping: {
           type: 'object',
-          description: 'Parameter-to-column mapping. Keys = enrichment param names. Values = { type: "mapping", value: "column-name" } or { type: "simple", value: "static-value" }',
+          description: 'Parameter-to-column mapping. Keys = enrichment param names. Values = { type: "mapping", value: "column-name" } or { type: "simple", value: "static-value" }. Simple values can embed {column_internal_name} placeholders (e.g. "Research {column1}") that are resolved per row at runtime. You can use human-readable column names in placeholders — the server resolves them.',
           additionalProperties: {
             type: 'object',
             properties: {
@@ -1127,34 +1127,72 @@ export function createMcpServer(apiKey: string): Server {
             table_uuid: string; enrichment_id: number; mapping: Record<string, any>;
           };
 
-          // Auto-resolve column names → UUIDs for mapping-type entries
+          // Auto-resolve column names → UUIDs for mapping-type entries,
+          // and {Column Name} → {internal_name} for simple-type template values
           const resolvedMapping: Record<string, any> = {};
-          let columnMap: Record<string, string> | null = null;
+          let columns: Column[] | null = null;
+          let columnNameToUuid: Record<string, string> | null = null;
+          let columnNameToInternal: Record<string, string> | null = null;
           const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+          const ensureColumnMaps = async () => {
+            if (columns) return;
+            columns = await databarClient.getTableColumns(table_uuid);
+            columnNameToUuid = {};
+            columnNameToInternal = {};
+            for (const c of columns) {
+              columnNameToUuid[c.name] = c.identifier;
+              columnNameToUuid[c.name.toLowerCase()] = c.identifier;
+              columnNameToInternal[c.name] = c.internal_name;
+              columnNameToInternal[c.name.toLowerCase()] = c.internal_name;
+              columnNameToInternal[c.internal_name] = c.internal_name;
+            }
+          };
+
           for (const [param, entry] of Object.entries(mapping)) {
-            if (typeof entry !== 'object' || entry?.type !== 'mapping') {
+            if (typeof entry !== 'object') {
               resolvedMapping[param] = entry;
               continue;
             }
+
+            if (entry?.type === 'simple') {
+              const value = String(entry.value || '');
+              const placeholderPattern = /\{(\??[^}]+)\}/g;
+              const hasPlaceholders = placeholderPattern.test(value);
+              if (hasPlaceholders) {
+                await ensureColumnMaps();
+                const resolved = value.replace(/\{(\??[^}]+)\}/g, (_match, ref: string) => {
+                  const isOptional = ref.startsWith('?');
+                  const colName = isOptional ? ref.slice(1) : ref;
+                  const internalName = columnNameToInternal![colName] || columnNameToInternal![colName.toLowerCase()];
+                  if (internalName) {
+                    return `{${isOptional ? '?' : ''}${internalName}}`;
+                  }
+                  return _match;
+                });
+                resolvedMapping[param] = { ...entry, value: resolved };
+              } else {
+                resolvedMapping[param] = entry;
+              }
+              continue;
+            }
+
+            if (entry?.type !== 'mapping') {
+              resolvedMapping[param] = entry;
+              continue;
+            }
+
             const value = String(entry.value || '');
             if (uuidPattern.test(value)) {
               resolvedMapping[param] = entry;
               continue;
             }
-            if (!columnMap) {
-              const cols = await databarClient.getTableColumns(table_uuid);
-              columnMap = {};
-              for (const c of cols) {
-                columnMap[c.name] = c.identifier;
-                columnMap[c.name.toLowerCase()] = c.identifier;
-              }
-            }
-            const uuid = columnMap[value] || columnMap[value.toLowerCase()];
+            await ensureColumnMaps();
+            const uuid = columnNameToUuid![value] || columnNameToUuid![value.toLowerCase()];
             if (uuid) {
               resolvedMapping[param] = { ...entry, value: uuid };
             } else {
-              const validNames = Object.keys(columnMap).filter(k => !uuidPattern.test(k)).join(', ');
+              const validNames = Object.keys(columnNameToUuid!).filter(k => !uuidPattern.test(k)).join(', ');
               return { content: [{ type: 'text', text: `Column "${value}" not found on this table.\n\nValid column names: ${validNames}\n\nUse one of these names in your mapping.` }], isError: true };
             }
           }
@@ -1203,8 +1241,8 @@ export function createMcpServer(apiKey: string): Server {
               );
             }
 
-            const columnHint = columnMap
-              ? `\nAvailable columns: ${Object.keys(columnMap).filter(k => !uuidPattern.test(k)).join(', ')}`
+            const columnHint = columnNameToUuid
+              ? `\nAvailable columns: ${Object.keys(columnNameToUuid).filter(k => !uuidPattern.test(k)).join(', ')}`
               : '';
             throw new Error(`Failed to add enrichment ${enrichment_id} to table: ${msg}${columnHint}`);
           }
