@@ -1146,6 +1146,8 @@ export function createMcpServer(apiKey: string): Server {
               columnNameToInternal[c.name] = c.internal_name;
               columnNameToInternal[c.name.toLowerCase()] = c.internal_name;
               columnNameToInternal[c.internal_name] = c.internal_name;
+              columnNameToInternal[c.identifier] = c.internal_name;
+              columnNameToInternal[c.identifier.replace(/-/g, '')] = c.internal_name;
             }
           };
 
