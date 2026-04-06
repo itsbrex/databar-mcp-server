@@ -1199,6 +1199,23 @@ export function createMcpServer(apiKey: string): Server {
             }
           }
 
+          // Auto-inject default schema for AI Researcher enrichments if not provided.
+          // The schema param tells the AI what fields/types to return (e.g. {"Result":"json","Reasoning":"str"}).
+          if (!resolvedMapping.schema) {
+            try {
+              const enrichmentDetails = await databarClient.getEnrichmentDetails(enrichment_id);
+              const schemaParam = enrichmentDetails.params?.find(p => p.name === 'schema');
+              if (schemaParam) {
+                resolvedMapping.schema = {
+                  type: 'simple',
+                  value: JSON.stringify({ Result: 'json', Reasoning: 'str' })
+                };
+              }
+            } catch (_) {
+              // Best-effort: ignore if we can't fetch enrichment details
+            }
+          }
+
           try {
             // Snapshot before, so we can detect the new table-enrichment ID
             const beforeEnrichments = await databarClient.getTableEnrichments(table_uuid);
