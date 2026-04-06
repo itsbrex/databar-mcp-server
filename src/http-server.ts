@@ -72,6 +72,17 @@ app.post('/mcp', async (req: express.Request, res: express.Response) => {
       return;
     }
 
+    // Session ID provided but not found — session was lost (e.g. after redeploy).
+    // Return 404 per MCP spec so the client knows to re-initialize.
+    if (sessionId && !sessions.has(sessionId)) {
+      res.status(404).json({
+        jsonrpc: '2.0',
+        error: { code: -32000, message: 'Session not found. Please start a new session.' },
+        id: null,
+      });
+      return;
+    }
+
     if (!sessionId && isInitializeRequest(req.body)) {
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
@@ -111,7 +122,11 @@ app.post('/mcp', async (req: express.Request, res: express.Response) => {
 app.get('/mcp', async (req: express.Request, res: express.Response) => {
   const sessionId = req.headers['mcp-session-id'] as string | undefined;
   if (!sessionId || !sessions.has(sessionId)) {
-    res.status(400).send('Invalid or missing session ID');
+    res.status(404).json({
+      jsonrpc: '2.0',
+      error: { code: -32000, message: 'Session not found. Please start a new session.' },
+      id: null,
+    });
     return;
   }
 
@@ -129,7 +144,11 @@ app.get('/mcp', async (req: express.Request, res: express.Response) => {
 app.delete('/mcp', async (req: express.Request, res: express.Response) => {
   const sessionId = req.headers['mcp-session-id'] as string | undefined;
   if (!sessionId || !sessions.has(sessionId)) {
-    res.status(400).send('Invalid or missing session ID');
+    res.status(404).json({
+      jsonrpc: '2.0',
+      error: { code: -32000, message: 'Session not found.' },
+      id: null,
+    });
     return;
   }
 
